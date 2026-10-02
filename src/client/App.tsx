@@ -112,9 +112,9 @@ const VFX_ASSETS: Record<CombatVfxKind, string> = {
 const AUDIO_ASSETS = {
   menu: "/audio/menu-rain-tactics.m4a",
   game: "/audio/game-tokyo-undercurrent.m4a",
-  attack: "/audio/claw-attack-a.wav",
-  dice: "/audio/dice-hit-a.wav",
-  heal: "/audio/heal-a.wav"
+  attack: "/audio/attack-sword.wav",
+  dice: "/audio/dice-hit-b.ogg",
+  heal: "/audio/heal-b.wav"
 } as const;
 
 const RANDOM_NAME_PREFIXES = [
