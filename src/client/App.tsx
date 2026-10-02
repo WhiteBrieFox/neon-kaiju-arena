@@ -45,6 +45,8 @@ import { MONSTERS } from "../shared/types";
 const STORAGE_KEY = "neon-kaiju-session";
 
 type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
+type MonsterArtVariant = "portrait" | "full";
+type CombatVfxKind = "electric" | "explosion" | "impact";
 
 const socket: GameSocket = io({
   autoConnect: true,
@@ -52,29 +54,257 @@ const socket: GameSocket = io({
   reconnectionDelayMax: 2000
 });
 
+const MONSTER_ASSETS: Record<
+  MonsterId,
+  { full: string; portrait: string; spriteIndex: number }
+> = {
+  voltclaw: {
+    full: "/voltclaw-full.png",
+    portrait: "/voltclaw-portrait.png",
+    spriteIndex: 0
+  },
+  apex: {
+    full: "/iron-gorilla-full.png",
+    portrait: "/iron-gorilla-portrait.png",
+    spriteIndex: 1
+  },
+  cosmocat: {
+    full: "/astral-cat-full.png",
+    portrait: "/astral-cat-portrait.png",
+    spriteIndex: 2
+  },
+  mechazero: {
+    full: "/unit-zero-full.png",
+    portrait: "/unit-zero-portrait.png",
+    spriteIndex: 3
+  },
+  cratercrab: {
+    full: "/magma-crab-full.png",
+    portrait: "/magma-crab-portrait.png",
+    spriteIndex: 4
+  },
+  rockethop: {
+    full: "/rocket-penguin-full.png",
+    portrait: "/rocket-penguin-portrait.png",
+    spriteIndex: 5
+  }
+};
+
+const VFX_ASSETS: Record<CombatVfxKind, string> = {
+  electric: "/electric-vfx-sheet.png",
+  explosion: "/explosion-vfx-sheet.png",
+  impact: "/impact-vfx-sheet.png"
+};
+
+const RANDOM_NAME_PREFIXES = [
+  "暴走",
+  "闪电",
+  "铁拳",
+  "迷你",
+  "午夜",
+  "熔岩",
+  "霓虹",
+  "冷面",
+  "无敌",
+  "火箭",
+  "超凶",
+  "东京"
+];
+
+const RANDOM_NAME_SUFFIXES = [
+  "团子",
+  "队长",
+  "爪爪",
+  "大王",
+  "阿怪",
+  "布丁",
+  "头槌",
+  "饭团",
+  "小炮",
+  "猛男",
+  "喵王",
+  "蟹老板"
+];
+
+function randomPlayerName(previous = "") {
+  const combinations = RANDOM_NAME_PREFIXES.length * RANDOM_NAME_SUFFIXES.length;
+  for (let attempt = 0; attempt < combinations; attempt += 1) {
+    const prefix =
+      RANDOM_NAME_PREFIXES[Math.floor(Math.random() * RANDOM_NAME_PREFIXES.length)];
+    const suffix =
+      RANDOM_NAME_SUFFIXES[Math.floor(Math.random() * RANDOM_NAME_SUFFIXES.length)];
+    const candidate = `${prefix}${suffix}`;
+    if (candidate !== previous) return candidate;
+  }
+  return "暴走团子";
+}
+
+const cutoutCache = new Map<string, Promise<string>>();
+
+function removeBakedCheckerboard(source: string) {
+  const cached = cutoutCache.get(source);
+  if (cached) return cached;
+
+  const result = new Promise<string>((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (!context) {
+        resolve(source);
+        return;
+      }
+
+      context.drawImage(image, 0, 0);
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+      const { data, width, height } = pixels;
+      const visited = new Uint8Array(width * height);
+      const queue = new Int32Array(width * height);
+      let head = 0;
+      let tail = 0;
+
+      const isBackground = (index: number) => {
+        const offset = index * 4;
+        const red = data[offset];
+        const green = data[offset + 1];
+        const blue = data[offset + 2];
+        const max = Math.max(red, green, blue);
+        const min = Math.min(red, green, blue);
+        return (red + green + blue) / 3 > 214 && max - min < 24;
+      };
+      const enqueue = (index: number) => {
+        if (visited[index] || !isBackground(index)) return;
+        visited[index] = 1;
+        queue[tail++] = index;
+      };
+
+      for (let x = 0; x < width; x += 1) {
+        enqueue(x);
+        enqueue((height - 1) * width + x);
+      }
+      for (let y = 1; y < height - 1; y += 1) {
+        enqueue(y * width);
+        enqueue(y * width + width - 1);
+      }
+
+      while (head < tail) {
+        const index = queue[head++];
+        const x = index % width;
+        const y = Math.floor(index / width);
+        if (x > 0) enqueue(index - 1);
+        if (x < width - 1) enqueue(index + 1);
+        if (y > 0) enqueue(index - width);
+        if (y < height - 1) enqueue(index + width);
+      }
+
+      for (let index = 0; index < visited.length; index += 1) {
+        if (visited[index]) data[index * 4 + 3] = 0;
+      }
+      context.putImageData(pixels, 0, 0);
+      canvas.toBlob((blob) => resolve(blob ? URL.createObjectURL(blob) : source), "image/png");
+    };
+    image.onerror = () => resolve(source);
+    image.src = source;
+  });
+
+  cutoutCache.set(source, result);
+  return result;
+}
+
+function useCutoutAsset(source: string | null) {
+  const [resolved, setResolved] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setResolved(null);
+    if (source) {
+      void removeBakedCheckerboard(source).then((asset) => {
+        if (active) setResolved(asset);
+      });
+    }
+    return () => {
+      active = false;
+    };
+  }, [source]);
+
+  return resolved;
+}
+
+function CutoutImage({
+  src,
+  alt,
+  className
+}: {
+  src: string;
+  alt: string;
+  className?: string;
+}) {
+  const cutout = useCutoutAsset(src);
+  return cutout ? <img className={className} src={cutout} alt={alt} draggable={false} /> : null;
+}
+
 function monsterById(id: MonsterId) {
   return MONSTERS.find((monster) => monster.id === id) ?? MONSTERS[0];
+}
+
+function playerMonster(player: PlayerState): MonsterId {
+  return player.monster ?? "voltclaw";
 }
 
 function MonsterArt({
   monster,
   size = 92,
-  defeated = false
+  defeated = false,
+  variant = "portrait"
 }: {
   monster: MonsterId;
   size?: number;
   defeated?: boolean;
+  variant?: MonsterArtVariant;
 }) {
+  const source = MONSTER_ASSETS[monster][variant];
+  const cutout = useCutoutAsset(variant === "full" ? source : null);
   return (
-    <svg
-      className={`monster-art ${defeated ? "is-defeated" : ""}`}
+    <img
+      className={`monster-art monster-art-${variant} ${defeated ? "is-defeated" : ""}`}
+      src={variant === "full" ? cutout ?? undefined : source}
       width={size}
       height={size}
-      viewBox="0 0 200 200"
-      aria-label={monsterById(monster).name}
-    >
-      <use href={`/monsters.svg#${monster}`} />
-    </svg>
+      alt={monsterById(monster).name}
+      draggable={false}
+    />
+  );
+}
+
+function CombatVfx({
+  kind,
+  monster,
+  effectKey
+}: {
+  kind: CombatVfxKind;
+  monster: MonsterId;
+  effectKey: number;
+}) {
+  const sheet = useCutoutAsset(VFX_ASSETS[kind]);
+  const spriteIndex = MONSTER_ASSETS[monster].spriteIndex;
+  const column = spriteIndex % 3;
+  const row = Math.floor(spriteIndex / 3);
+
+  if (!sheet) return null;
+  return (
+    <motion.div
+      key={effectKey}
+      className={`combat-vfx combat-vfx-${kind}`}
+      style={{
+        backgroundImage: `url("${sheet}")`,
+        backgroundPosition: `${column * 50}% ${row * 100}%`
+      }}
+      initial={{ opacity: 0, scale: 0.35, rotate: kind === "impact" ? -12 : 0 }}
+      animate={{ opacity: [0, 1, 0.82, 0], scale: [0.35, 1.05, 1.22, 1.45] }}
+      transition={{ duration: 0.78, ease: "easeOut" }}
+    />
   );
 }
 
@@ -108,7 +338,8 @@ function PlayerPanel({
   inTokyo: boolean;
   isSelf: boolean;
 }) {
-  const monster = monsterById(player.monster);
+  const selectedMonster = playerMonster(player);
+  const monster = monsterById(selectedMonster);
   return (
     <motion.article
       layout
@@ -121,7 +352,7 @@ function PlayerPanel({
       style={{ "--monster-color": monster.colors[0] } as React.CSSProperties}
     >
       <div className="player-avatar">
-        <MonsterArt monster={player.monster} size={64} defeated={!player.alive} />
+        <MonsterArt monster={selectedMonster} size={70} defeated={!player.alive} />
         <span className={`connection-dot ${player.connected ? "" : "offline"}`} />
       </div>
       <div className="player-info">
@@ -293,7 +524,7 @@ function TokyoSlot({
             exit={{ scale: 1.4, opacity: 0, filter: "blur(8px)" }}
             transition={{ type: "spring", stiffness: 230, damping: 18 }}
           >
-            <MonsterArt monster={player.monster} size={126} />
+            <MonsterArt monster={playerMonster(player)} size={210} variant="full" />
             <strong>{player.name}</strong>
             <span>{player.hp} HP</span>
           </motion.div>
@@ -358,6 +589,16 @@ function Lobby({
 }) {
   const self = state.players.find((item) => item.id === identity.playerId);
   const [variant, setVariant] = useState(true);
+  const selectedMonsters = new Map(
+    state.players
+      .filter((participant) => participant.monster)
+      .map((participant) => [participant.monster!, participant])
+  );
+  const allReady =
+    state.players.length >= 2 &&
+    state.players.every(
+      (participant) => participant.connected && participant.monster && participant.ready
+    );
   const copyInvite = async () => {
     const url = `${location.origin}?room=${state.code}`;
     await navigator.clipboard.writeText(url);
@@ -365,64 +606,166 @@ function Lobby({
   return (
     <main className="lobby-screen">
       <div className="lobby-shell">
-        <header className="brand-lockup">
-          <span className="brand-kicker">NEON DISTRICT // COMBAT LINK</span>
-          <h1>怪兽之夜</h1>
-          <p>集结完成后，由房主启动东京争夺战。</p>
-        </header>
-        <section className="room-code-block">
-          <span>房间代码</span>
-          <strong>{state.code}</strong>
-          <button onClick={copyInvite} title="复制邀请链接"><Copy size={18} />复制链接</button>
-        </section>
-        <section className="lobby-grid">
-          {Array.from({ length: 6 }, (_, index) => {
-            const participant = state.players[index];
-            return participant ? (
-              <motion.div
-                layout
-                initial={{ opacity: 0, scale: 0.86 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="lobby-player"
-                key={participant.id}
-              >
-                <MonsterArt monster={participant.monster} size={118} />
-                <strong>{participant.name}</strong>
-                <span>{monsterById(participant.monster).name}</span>
-                {participant.isHost && <i>HOST</i>}
-              </motion.div>
-            ) : (
-              <div className="lobby-player empty" key={index}>
-                <Users size={30} />
-                <span>等待玩家</span>
-              </div>
-            );
-          })}
-        </section>
-        <footer className="lobby-actions">
-          {state.players.length === 2 && self?.isHost && (
-            <label className="variant-toggle">
-              <input
-                type="checkbox"
-                checked={variant}
-                onChange={(event) => setVariant(event.target.checked)}
-              />
-              <span />
-              启用双人推荐规则
-            </label>
-          )}
-          {self?.isHost ? (
-            <button
-              className="primary-action launch"
-              disabled={state.players.length < 2}
-              onClick={() => onCommand({ type: "START_GAME", twoPlayerVariant: variant })}
-            >
-              <Swords /> 启动对局
+        <header className="lobby-header">
+          <div className="lobby-brand">
+            <CutoutImage src="/game-logo.png" alt="怪兽之夜" />
+            <div>
+              <span className="brand-kicker">COMBAT ASSEMBLY</span>
+              <strong>东京作战集结区</strong>
+            </div>
+          </div>
+          <section className="room-code-block">
+            <span>房间代码</span>
+            <strong>{state.code}</strong>
+            <button onClick={copyInvite} title="复制邀请链接">
+              <Copy size={17} />
+              <span>复制链接</span>
             </button>
-          ) : (
-            <div className="waiting-label"><Radio size={18} /> 等待房主开始</div>
-          )}
-        </footer>
+          </section>
+        </header>
+        <div className="lobby-workspace">
+          <section className="roster-section">
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">ROOM ROSTER</span>
+                <h2>作战成员</h2>
+              </div>
+              <span className="player-count"><Users size={15} /> {state.players.length} / 6</span>
+            </div>
+            <div className="lobby-grid">
+              {Array.from({ length: 6 }, (_, index) => {
+                const participant = state.players[index];
+                if (!participant) {
+                  return (
+                    <div className="lobby-player empty" key={index}>
+                      <Users size={26} />
+                      <span>等待玩家加入</span>
+                    </div>
+                  );
+                }
+                const monster = participant.monster
+                  ? monsterById(participant.monster)
+                  : null;
+                return (
+                  <motion.div
+                    layout
+                    initial={{ opacity: 0, scale: 0.94 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className={[
+                      "lobby-player",
+                      participant.id === identity.playerId ? "is-self" : "",
+                      participant.ready ? "is-ready" : ""
+                    ].join(" ")}
+                    style={
+                      monster
+                        ? ({ "--monster-color": monster.colors[0] } as React.CSSProperties)
+                        : undefined
+                    }
+                    key={participant.id}
+                  >
+                    <div className="lobby-player-art">
+                      {participant.monster ? (
+                        <MonsterArt monster={participant.monster} size={150} variant="full" />
+                      ) : (
+                        <CircleDot size={35} />
+                      )}
+                    </div>
+                    <div className="lobby-player-copy">
+                      <div>
+                        <strong>{participant.name}</strong>
+                        {participant.isHost && <Crown size={13} aria-label="房主" />}
+                      </div>
+                      <span>{monster ? monster.name : "正在选择怪兽"}</span>
+                    </div>
+                    <div className={`ready-state ${participant.ready ? "ready" : ""}`}>
+                      {participant.ready ? <Check size={13} /> : <Clock3 size={13} />}
+                      {participant.ready ? "已准备" : "未准备"}
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </div>
+          </section>
+
+          <aside className="monster-select-panel">
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">KAIJU ASSIGNMENT</span>
+                <h2>选择你的怪兽</h2>
+              </div>
+              <span className="selection-step">01 / 02</span>
+            </div>
+            <div className="lobby-monster-grid">
+              {MONSTERS.map((monster) => {
+                const owner = selectedMonsters.get(monster.id);
+                const selected = self?.monster === monster.id;
+                const unavailable = Boolean(owner && owner.id !== self?.id);
+                return (
+                  <button
+                    key={monster.id}
+                    className={selected ? "selected" : ""}
+                    style={{ "--monster-color": monster.colors[0] } as React.CSSProperties}
+                    disabled={unavailable}
+                    onClick={() =>
+                      onCommand({ type: "SELECT_MONSTER", monster: monster.id })
+                    }
+                    aria-label={monster.name}
+                  >
+                    <MonsterArt monster={monster.id} size={112} />
+                    <span>
+                      <strong>{monster.name}</strong>
+                      <small>{unavailable ? `${owner?.name} 已选择` : monster.title}</small>
+                    </span>
+                    {selected && <Check className="selected-check" />}
+                  </button>
+                );
+              })}
+            </div>
+
+            <footer className="lobby-actions">
+              {state.players.length === 2 && self?.isHost && (
+                <label className="variant-toggle">
+                  <input
+                    type="checkbox"
+                    checked={variant}
+                    onChange={(event) => setVariant(event.target.checked)}
+                  />
+                  <span />
+                  启用双人推荐规则
+                </label>
+              )}
+              <button
+                className={`ready-button ${self?.ready ? "is-ready" : ""}`}
+                disabled={!self?.monster}
+                onClick={() => onCommand({ type: "SET_READY", ready: !self?.ready })}
+              >
+                {self?.ready ? <RotateCcw /> : <Check />}
+                {self?.ready ? "取消准备" : "准备就绪"}
+              </button>
+              {self?.isHost ? (
+                <button
+                  className="primary-action launch"
+                  disabled={!allReady}
+                  onClick={() => onCommand({ type: "START_GAME", twoPlayerVariant: variant })}
+                >
+                  <Swords /> 开始游戏
+                </button>
+              ) : (
+                <div className="waiting-label">
+                  <Radio size={18} />
+                  {allReady ? "等待房主开始" : "等待全员准备"}
+                </div>
+              )}
+              <p className="lobby-hint">
+                {state.players.length < 2
+                  ? "至少需要两名玩家"
+                  : allReady
+                    ? "全员就绪，可以开始"
+                    : "每名玩家选择不同怪兽并准备"}
+              </p>
+            </footer>
+          </aside>
+        </div>
       </div>
     </main>
   );
@@ -454,7 +797,7 @@ function TargetModal({
         <div className="target-list">
           {state.players.filter((p) => p.alive && p.id !== selfId).map((target) => (
             <button key={target.id} onClick={() => onChoose(target.id)}>
-              <MonsterArt monster={target.monster} size={54} />
+              <MonsterArt monster={playerMonster(target)} size={54} />
               <span><strong>{target.name}</strong><small>{target.hp} HP</small></span>
               <ChevronRight />
             </button>
@@ -483,6 +826,30 @@ function GameBoard({
   const bay = state.players.find((item) => item.id === state.tokyoBay);
   const isTurn = state.currentPlayerId === identity.playerId;
   const mustYield = state.phase === "yielding" && state.pendingYields[0] === identity.playerId;
+  const latestLog = state.log[state.log.length - 1];
+  const [combatVfx, setCombatVfx] = useState<{
+    key: number;
+    kind: CombatVfxKind;
+    monster: MonsterId;
+  } | null>(null);
+  const seenLogId = useRef(latestLog?.id);
+
+  useEffect(() => {
+    if (!latestLog || latestLog.id === seenLogId.current) return;
+    seenLogId.current = latestLog.id;
+
+    let kind: CombatVfxKind | null = null;
+    if (latestLog.tone === "energy") kind = "electric";
+    else if (/攻击|伤害|失去|淘汰|轰击/.test(latestLog.text)) kind = "impact";
+    else if (latestLog.tone === "danger") kind = "explosion";
+    if (!kind) return;
+
+    setCombatVfx({
+      key: latestLog.id,
+      kind,
+      monster: current ? playerMonster(current) : playerMonster(self)
+    });
+  }, [current?.monster, latestLog, self.monster]);
 
   const buy = (card: PowerCard) => {
     if (card.effects.some((effect) => effect.kind === "damageTarget")) setTargetCard(card);
@@ -493,7 +860,7 @@ function GameBoard({
     <main className="game-screen">
       <header className="game-header">
         <div className="compact-brand">
-          <Swords />
+          <CutoutImage src="/game-logo.png" alt="" />
           <span><strong>怪兽之夜</strong><small>NEON KAIJU ARENA</small></span>
         </div>
         <div className="turn-banner">
@@ -524,6 +891,15 @@ function GameBoard({
       <div className="board-layout">
         <section className="arena">
           <div className="scanline" />
+          <AnimatePresence>
+            {combatVfx && (
+              <CombatVfx
+                effectKey={combatVfx.key}
+                kind={combatVfx.kind}
+                monster={combatVfx.monster}
+              />
+            )}
+          </AnimatePresence>
           <div className="arena-title">
             <span>TOKYO COMBAT ZONE</span>
             <strong>东京争夺区</strong>
@@ -641,101 +1017,98 @@ function Welcome({
   onEnter
 }: {
   connected: boolean;
-  onEnter: (mode: "create" | "join", name: string, monster: MonsterId, code?: string) => void;
+  onEnter: (mode: "create" | "join", name: string, code?: string) => void;
 }) {
   const queryRoom = new URLSearchParams(location.search).get("room")?.toUpperCase() ?? "";
   const [mode, setMode] = useState<"create" | "join">(queryRoom ? "join" : "create");
   const [name, setName] = useState("");
   const [code, setCode] = useState(queryRoom);
-  const [monster, setMonster] = useState<MonsterId>("voltclaw");
 
   return (
     <main className="welcome-screen">
       <div className="welcome-noise" />
-      <section className="welcome-panel">
+      <section className="welcome-content">
         <div className="brand-lockup">
           <span className="brand-kicker">LOCAL MULTIPLAYER // 2–6 PLAYERS</span>
-          <h1>怪兽之夜</h1>
-          <p>掷出你的野心，占领城市核心。</p>
+          <CutoutImage className="game-logo" src="/game-logo.png" alt="怪兽之夜" />
+          <p>巨兽已抵达东京。建立房间，召集你的对手。</p>
         </div>
 
-        <div className="mode-tabs">
-          <button className={mode === "create" ? "active" : ""} onClick={() => setMode("create")}>
-            创建房间
-          </button>
-          <button className={mode === "join" ? "active" : ""} onClick={() => setMode("join")}>
-            加入房间
-          </button>
-        </div>
+        <div className="welcome-controls">
+          <div className="mode-tabs">
+            <button
+              className={`art-button create ${mode === "create" ? "active" : ""}`}
+              onClick={() => setMode("create")}
+            >
+              <Sparkles />
+              <span><strong>创建房间</strong><small>CREATE ROOM</small></span>
+            </button>
+            <button
+              className={`art-button join ${mode === "join" ? "active" : ""}`}
+              onClick={() => setMode("join")}
+            >
+              <LogIn />
+              <span><strong>加入房间</strong><small>JOIN ROOM</small></span>
+            </button>
+          </div>
 
-        <div className="entry-form">
-          <label>
-            <span>玩家代号</span>
-            <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              maxLength={18}
-              placeholder="输入昵称"
-            />
-          </label>
-          {mode === "join" && (
+          <div className="entry-form">
             <label>
-              <span>房间代码</span>
-              <input
-                value={code}
-                onChange={(event) => setCode(event.target.value.toUpperCase())}
-                maxLength={5}
-                placeholder="ABCDE"
-                className="room-input"
-              />
+              <span>玩家代号</span>
+              <div className="name-input-row">
+                <input
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  maxLength={18}
+                  placeholder="输入昵称"
+                />
+                <button
+                  type="button"
+                  className="random-name-button"
+                  onClick={() => setName((current) => randomPlayerName(current))}
+                  title="随机生成昵称"
+                  aria-label="随机生成昵称"
+                >
+                  <Dices />
+                </button>
+              </div>
             </label>
-          )}
-        </div>
+            {mode === "join" && (
+              <label>
+                <span>房间代码</span>
+                <input
+                  value={code}
+                  onChange={(event) => setCode(event.target.value.toUpperCase())}
+                  maxLength={5}
+                  placeholder="ABCDE"
+                  className="room-input"
+                />
+              </label>
+            )}
+          </div>
 
-        <div className="monster-picker">
-          <span>选择怪兽</span>
-          <div className="monster-grid">
-            {MONSTERS.map((item) => (
-              <button
-                key={item.id}
-                className={monster === item.id ? "selected" : ""}
-                style={{ "--monster-color": item.colors[0] } as React.CSSProperties}
-                onClick={() => setMonster(item.id)}
-              >
-                <MonsterArt monster={item.id} size={88} />
-                <strong>{item.name}</strong>
-                <small>{item.title}</small>
-                {monster === item.id && <Check className="selected-check" />}
-              </button>
-            ))}
+          <button
+            className={`enter-button art-button ${mode}`}
+            disabled={!connected || !name.trim() || (mode === "join" && code.length !== 5)}
+            onClick={() => onEnter(mode, name.trim(), code)}
+          >
+            {mode === "create" ? <Sparkles /> : <LogIn />}
+            <span>
+              <strong>{mode === "create" ? "建立作战房间" : "进入作战房间"}</strong>
+              <small>{mode === "create" ? "OPEN COMBAT LINK" : "CONNECT TO ROOM"}</small>
+            </span>
+          </button>
+          <div className={`server-indicator ${connected ? "" : "offline"}`}>
+            {connected ? <Wifi size={14} /> : <WifiOff size={14} />}
+            {connected ? "作战服务器在线" : "正在连接作战服务器"}
           </div>
         </div>
-
-        <button
-          className="primary-action enter-button"
-          disabled={!connected || !name.trim() || (mode === "join" && code.length !== 5)}
-          onClick={() => onEnter(mode, name.trim(), monster, code)}
-        >
-          {mode === "create" ? <Sparkles /> : <LogIn />}
-          {mode === "create" ? "建立战斗链路" : "进入战场"}
-        </button>
-        <div className={`server-indicator ${connected ? "" : "offline"}`}>
-          {connected ? <Wifi size={14} /> : <WifiOff size={14} />}
-          {connected ? "本地服务器在线" : "正在连接本地服务器"}
-        </div>
       </section>
-      <aside className="welcome-art">
-        <div className="hero-monsters">
-          <MonsterArt monster="apex" size={330} />
-          <MonsterArt monster="voltclaw" size={390} />
-          <MonsterArt monster="cosmocat" size={300} />
-        </div>
-        <div className="hero-copy">
-          <span>SEASON 01</span>
-          <strong>占领东京</strong>
-          <small>20 分，或者成为最后的幸存者。</small>
-        </div>
-      </aside>
+      <div className="hero-copy">
+        <span>TOKYO // NIGHT 01</span>
+        <strong>占领东京</strong>
+        <small>20 分，或者成为最后的幸存者。</small>
+      </div>
     </main>
   );
 }
@@ -794,11 +1167,10 @@ export default function App() {
   const enterRoom = (
     mode: "create" | "join",
     name: string,
-    monster: MonsterId,
     code?: string
   ) => {
     const event = mode === "create" ? "createRoom" : "joinRoom";
-    const payload = mode === "create" ? { name, monster } : { name, monster, code: code! };
+    const payload = mode === "create" ? { name } : { name, code: code! };
     socket.emit(event as "createRoom", payload as never, (response: SocketAck<RoomIdentity>) => {
       if (!response.ok || !response.data) {
         showToast(response.error ?? "无法进入房间");

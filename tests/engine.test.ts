@@ -52,6 +52,28 @@ describe("game engine", () => {
     expect(state.currentPlayerId).toBeTruthy();
   });
 
+  it("requires unique monsters and every player to be ready before starting", () => {
+    const state = createGame("game-lobby", "ABCDE", [
+      { id: "p1", name: "玩家1", monster: null, isHost: true },
+      { id: "p2", name: "玩家2", monster: null, isHost: false }
+    ]);
+
+    dispatch(state, "p1", { type: "SELECT_MONSTER", monster: "voltclaw" });
+    expect(() =>
+      dispatch(state, "p2", { type: "SELECT_MONSTER", monster: "voltclaw" })
+    ).toThrow("已经被其他玩家选择");
+
+    dispatch(state, "p2", { type: "SELECT_MONSTER", monster: "apex" });
+    dispatch(state, "p1", { type: "SET_READY", ready: true });
+    expect(() => dispatch(state, "p1", { type: "START_GAME" })).toThrow(
+      "所有玩家选择怪兽并准备后才能开始"
+    );
+
+    dispatch(state, "p2", { type: "SET_READY", ready: true });
+    dispatch(state, "p1", { type: "START_GAME" });
+    expect(state.phase).toBe("rolling");
+  });
+
   it("lets the first player reroll held dice and must enter an empty Tokyo", () => {
     const state = makeGame(2);
     dispatch(state, "p1", { type: "START_GAME" });

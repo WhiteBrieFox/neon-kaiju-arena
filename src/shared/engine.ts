@@ -327,6 +327,7 @@ export function createGame(
     round: 1,
     players: players.map((item) => ({
       ...item,
+      ready: item.monster !== null,
       hp: 10,
       maxHp: 10,
       vp: 0,
@@ -364,11 +365,12 @@ export function addPlayer(
 ) {
   if (state.phase !== "lobby") throw new RuleError("游戏已经开始");
   if (state.players.length >= 6) throw new RuleError("房间已满");
-  if (state.players.some((item) => item.monster === data.monster)) {
+  if (data.monster && state.players.some((item) => item.monster === data.monster)) {
     throw new RuleError("这个怪兽已经被选择");
   }
   state.players.push({
     ...data,
+    ready: data.monster !== null,
     hp: 10,
     maxHp: 10,
     vp: 0,
@@ -387,6 +389,7 @@ export function setConnected(state: GameState, playerId: string, connected: bool
   const target = state.players.find((item) => item.id === playerId);
   if (!target) return;
   target.connected = connected;
+  if (!connected && state.phase === "lobby") target.ready = false;
   state.revision += 1;
 }
 
@@ -394,10 +397,33 @@ export function dispatch(state: GameState, playerId: string, command: GameComman
   if (state.phase === "finished") throw new RuleError("游戏已经结束");
   const actor = player(state, playerId);
 
-  if (command.type === "START_GAME") {
+  if (command.type === "SELECT_MONSTER") {
+    if (state.phase !== "lobby") throw new RuleError("游戏已经开始");
+    if (
+      state.players.some(
+        (item) => item.id !== actor.id && item.monster === command.monster
+      )
+    ) {
+      throw new RuleError("这个怪兽已经被其他玩家选择");
+    }
+    actor.monster = command.monster;
+    actor.ready = false;
+    log(state, `${actor.name} 选择了新的怪兽`);
+  } else if (command.type === "SET_READY") {
+    if (state.phase !== "lobby") throw new RuleError("游戏已经开始");
+    if (command.ready && !actor.monster) throw new RuleError("请先选择怪兽");
+    actor.ready = command.ready;
+    log(state, `${actor.name}${command.ready ? "已准备" : "取消准备"}`);
+  } else if (command.type === "START_GAME") {
     if (!actor.isHost) throw new RuleError("只有房主可以开始游戏");
     if (state.phase !== "lobby") throw new RuleError("游戏已经开始");
     if (state.players.length < 2) throw new RuleError("至少需要两名玩家");
+    if (state.players.some((item) => !item.connected)) {
+      throw new RuleError("请等待所有玩家重新连接");
+    }
+    if (state.players.some((item) => !item.monster || !item.ready)) {
+      throw new RuleError("所有玩家选择怪兽并准备后才能开始");
+    }
     state.twoPlayerVariant = state.players.length === 2 && command.twoPlayerVariant !== false;
     state.deck = shuffle(state, createDeck());
     refillMarket(state);

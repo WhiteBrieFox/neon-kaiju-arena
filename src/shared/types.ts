@@ -57,7 +57,8 @@ export interface DieState {
 export interface PlayerState {
   id: string;
   name: string;
-  monster: MonsterId;
+  monster: MonsterId | null;
+  ready: boolean;
   hp: number;
   maxHp: number;
   vp: number;
@@ -107,6 +108,8 @@ export type ClientGameState = Omit<GameState, "deck" | "rngState"> & {
 };
 
 export type GameCommand =
+  | { type: "SELECT_MONSTER"; monster: MonsterId }
+  | { type: "SET_READY"; ready: boolean }
   | { type: "START_GAME"; twoPlayerVariant?: boolean }
   | { type: "ROLL_DICE" }
   | { type: "TOGGLE_DIE"; dieId: number }
@@ -147,11 +150,11 @@ export interface ServerToClientEvents {
 
 export interface ClientToServerEvents {
   createRoom: (
-    data: { name: string; monster: MonsterId },
+    data: { name: string },
     ack: (response: SocketAck<RoomIdentity>) => void
   ) => void;
   joinRoom: (
-    data: { code: string; name: string; monster: MonsterId },
+    data: { code: string; name: string },
     ack: (response: SocketAck<RoomIdentity>) => void
   ) => void;
   resumeRoom: (
@@ -170,10 +173,10 @@ export const MONSTERS: Array<{
   title: string;
   colors: [string, string];
 }> = [
-  { id: "voltclaw", name: "伏特爪", title: "霓虹猎手", colors: ["#13d8ff", "#06789b"] },
-  { id: "apex", name: "铁拳猿", title: "都市暴君", colors: ["#ff5b50", "#9f261f"] },
-  { id: "cosmocat", name: "星界猫", title: "心灵风暴", colors: ["#e667ff", "#7737ad"] },
-  { id: "mechazero", name: "零号机", title: "钢铁意志", colors: ["#b9ff39", "#588e16"] },
-  { id: "cratercrab", name: "熔岩蟹", title: "地核怒火", colors: ["#ffb82e", "#bd4d19"] },
-  { id: "rockethop", name: "火箭企鹅", title: "极地王牌", colors: ["#79f0e7", "#297d91"] }
+  { id: "voltclaw", name: "伏特爪", title: "霓虹猎手", colors: ["#22d3ee", "#0e7490"] },
+  { id: "apex", name: "铁拳猿", title: "都市暴君", colors: ["#ff3b3b", "#991b1b"] },
+  { id: "cosmocat", name: "星界猫", title: "心灵风暴", colors: ["#b56cff", "#6d28d9"] },
+  { id: "mechazero", name: "零号机", title: "钢铁意志", colors: ["#8bff3d", "#3f8f1f"] },
+  { id: "cratercrab", name: "熔岩蟹", title: "地核怒火", colors: ["#ff7a1a", "#b9380b"] },
+  { id: "rockethop", name: "火箭企鹅", title: "极地王牌", colors: ["#ffd43b", "#b77900"] }
 ];

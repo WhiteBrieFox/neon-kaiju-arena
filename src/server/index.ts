@@ -20,7 +20,6 @@ import type {
   ClientToServerEvents,
   CommandEnvelope,
   GameState,
-  MonsterId,
   RoomIdentity,
   ServerToClientEvents,
   SocketAck
@@ -44,18 +43,8 @@ interface Room {
 const rooms = new Map<string, Room>();
 const socketIdentity = new Map<string, RoomIdentity>();
 
-const monsterIds: MonsterId[] = [
-  "voltclaw",
-  "apex",
-  "cosmocat",
-  "mechazero",
-  "cratercrab",
-  "rockethop"
-];
-
 const playerInputSchema = z.object({
-  name: z.string().trim().min(1).max(18),
-  monster: z.enum(monsterIds as [MonsterId, ...MonsterId[]])
+  name: z.string().trim().min(1).max(18)
 });
 
 const joinInputSchema = playerInputSchema.extend({
@@ -119,7 +108,7 @@ io.on("connection", (socket) => {
       const playerId = randomUUID();
       const session = { playerId, token: token() };
       const state = createGame(randomUUID(), code, [
-        { id: playerId, name: data.name, monster: data.monster, isHost: true }
+        { id: playerId, name: data.name, monster: null, isHost: true }
       ]);
       const room: Room = {
         state,
@@ -147,7 +136,7 @@ io.on("connection", (socket) => {
       addPlayer(room.state, {
         id: playerId,
         name: data.name,
-        monster: data.monster,
+        monster: null,
         isHost: false
       });
       room.sessions.set(playerId, session);

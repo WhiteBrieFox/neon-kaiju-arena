@@ -1,65 +1,116 @@
 <svg xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="cyan" x2="1" y2="1"><stop stop-color="#87f5ff"/><stop offset="1" stop-color="#08799d"/></linearGradient>
-    <linearGradient id="red" x2="1" y2="1"><stop stop-color="#ff806f"/><stop offset="1" stop-color="#8c181c"/></linearGradient>
-    <linearGradient id="violet" x2="1" y2="1"><stop stop-color="#f5a0ff"/><stop offset="1" stop-color="#7630af"/></linearGradient>
-    <linearGradient id="lime" x2="1" y2="1"><stop stop-color="#d8ff64"/><stop offset="1" stop-color="#477f16"/></linearGradient>
-    <linearGradient id="amber" x2="1" y2="1"><stop stop-color="#ffd568"/><stop offset="1" stop-color="#b74719"/></linearGradient>
-    <linearGradient id="ice" x2="1" y2="1"><stop stop-color="#d4ffff"/><stop offset="1" stop-color="#3b819d"/></linearGradient>
-    <filter id="shadow"><feDropShadow dx="0" dy="8" stdDeviation="7" flood-color="#000" flood-opacity=".55"/></filter>
+    <linearGradient id="gunmetal" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#74818a"/><stop offset=".28" stop-color="#26313a"/>
+      <stop offset=".7" stop-color="#0b1015"/><stop offset="1" stop-color="#394750"/>
+    </linearGradient>
+    <linearGradient id="blacksteel" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#27323a"/><stop offset=".48" stop-color="#090d11"/><stop offset="1" stop-color="#151d23"/>
+    </linearGradient>
+    <linearGradient id="bone" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#d6d8d3"/><stop offset=".38" stop-color="#707774"/><stop offset="1" stop-color="#21282a"/>
+    </linearGradient>
+    <linearGradient id="rust" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#8a4338"/><stop offset=".4" stop-color="#351b1a"/><stop offset="1" stop-color="#0e0b0c"/>
+    </linearGradient>
+    <linearGradient id="obsidian" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#343844"/><stop offset=".38" stop-color="#11141b"/><stop offset="1" stop-color="#05070a"/>
+    </linearGradient>
+    <linearGradient id="lava" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#ff9a45"/><stop offset=".35" stop-color="#c32f22"/><stop offset="1" stop-color="#2b0b0b"/>
+    </linearGradient>
+    <filter id="hardShadow" x="-40%" y="-40%" width="180%" height="190%">
+      <feDropShadow dx="0" dy="11" stdDeviation="7" flood-color="#000" flood-opacity=".82"/>
+    </filter>
+    <filter id="cyanGlow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="3.2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="redGlow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
   </defs>
+
   <symbol id="voltclaw" viewBox="0 0 200 200">
-    <g filter="url(#shadow)">
-      <path d="M38 177 55 112 41 77 70 82 81 36l22 32 31-38 3 50 27-7-16 39 15 65z" fill="url(#cyan)" stroke="#b8fbff" stroke-width="5"/>
-      <path d="m75 100 22 12 30-15-8 38-19 13-22-13z" fill="#07141e"/>
-      <path d="m81 109 13 5-15 8zm39-4-14 9 16 5z" fill="#aaff33"/>
-      <path d="m94 139 11-10 10 10-10 7z" fill="#f5ffff"/>
+    <g filter="url(#hardShadow)">
+      <path d="M18 184 34 127 50 111 45 77 68 87 75 35 93 61 113 19 121 61 155 35 143 83 174 71 157 111 180 133 184 184Z" fill="url(#blacksteel)" stroke="#52636d" stroke-width="3"/>
+      <path d="m53 105 21-31 29-12 35 15 14 31-9 54-42 23-43-23z" fill="url(#gunmetal)" stroke="#85929a" stroke-width="2"/>
+      <path d="m70 88 30-13 30 12-7 16-23 8-24-8z" fill="#080c10"/>
+      <path d="m64 105 28 9-17 17-19-8zm73 0-29 9 17 17 19-9z" fill="#11171c" stroke="#34444d" stroke-width="2"/>
+      <path d="m72 109 17 6-12 8-12-5zm56 0-17 6 12 8 12-5z" fill="#63efff" filter="url(#cyanGlow)"/>
+      <path d="m84 139 16-10 17 10-5 22-12 8-13-8z" fill="#080b0e" stroke="#4f5b62" stroke-width="2"/>
+      <path d="m91 146 9 7 9-7" fill="none" stroke="#aeb8bc" stroke-width="3"/>
+      <path d="M49 148 29 165m123-17 21 17M81 53 67 28m52 31 19-38" fill="none" stroke="#6ff3ff" stroke-width="3" opacity=".82" filter="url(#cyanGlow)"/>
     </g>
   </symbol>
+
   <symbol id="apex" viewBox="0 0 200 200">
-    <g filter="url(#shadow)">
-      <path d="M31 180 47 103 67 70 62 37l31 19 21-28 20 34 31 16-14 102z" fill="url(#red)" stroke="#ffb19f" stroke-width="5"/>
-      <path d="M60 107 80 78l42-3 24 34-16 43-53 2z" fill="#321315"/>
-      <path d="m72 99 21 3-17 12zm59-2-19 6 17 11z" fill="#ffdc45"/>
-      <path d="M82 130q23 17 46-2-7 29-25 29-17 0-21-27" fill="#0b0809"/>
+    <g filter="url(#hardShadow)">
+      <path d="M12 185 25 141 48 119 41 83 60 69 67 33 88 53 108 24 126 55 153 45 149 80 170 101 162 130 188 185Z" fill="#111316" stroke="#4d555a" stroke-width="3"/>
+      <path d="m46 109 25-39 35-14 36 18 20 39-13 56-47 18-48-18z" fill="url(#rust)" stroke="#76433d" stroke-width="3"/>
+      <path d="m64 89 34-18 37 16-4 20-30 12-32-11z" fill="#161012"/>
+      <path d="m52 113 38 4-15 24-29-7zm98 0-38 4 16 24 29-8z" fill="#0c0d0f" stroke="#542b29" stroke-width="2"/>
+      <path d="m66 118 19 2-12 11-14-4zm68 0-19 2 12 11 14-4z" fill="#ff4a3d" filter="url(#redGlow)"/>
+      <path d="m76 145 25-11 27 11-8 24-19 8-18-8z" fill="#09090a"/>
+      <path d="m82 151 9 6 10-7 10 7 9-6" fill="none" stroke="#b4b5b1" stroke-width="3"/>
+      <path d="M49 70 31 48m119 29 21-25M37 145l-19 20m145-20 20 20" stroke="#a0463a" stroke-width="5" stroke-linecap="square"/>
     </g>
   </symbol>
+
   <symbol id="cosmocat" viewBox="0 0 200 200">
-    <g filter="url(#shadow)">
-      <path d="m42 180 13-92 2-54 38 28 45-31 5 58 17 91z" fill="url(#violet)" stroke="#ffc5ff" stroke-width="5"/>
-      <path d="M67 93q34-31 69 0l-8 52-29 18-29-20z" fill="#23103e"/>
-      <ellipse cx="82" cy="108" rx="8" ry="13" fill="#68ffef"/>
-      <ellipse cx="120" cy="108" rx="8" ry="13" fill="#68ffef"/>
-      <path d="m94 131 8-5 8 5-8 8z" fill="#ff95dd"/>
-      <circle cx="102" cy="72" r="13" fill="none" stroke="#effcff" stroke-width="4"/>
+    <g filter="url(#hardShadow)">
+      <path d="m29 185 13-68 10-30-3-60 43 29 21-23 35-14-1 63 17 34 10 69z" fill="url(#obsidian)" stroke="#5a6372" stroke-width="3"/>
+      <path d="m53 93 36-30 44 5 19 31-11 65-40 23-42-24z" fill="#11151d" stroke="#4c5564" stroke-width="2"/>
+      <path d="m57 92 40-18 40 17-6 24-31 10-34-10z" fill="#07090e"/>
+      <path d="m62 112 29 8-16 20-21-7zm76 0-29 8 16 20 22-8z" fill="#151a25" stroke="#434c5d" stroke-width="2"/>
+      <path d="m68 117 18 5-11 10-13-4zm64 0-18 5 11 10 13-4z" fill="#82e8ff" filter="url(#cyanGlow)"/>
+      <path d="m85 146 15-9 16 9-5 18-11 7-11-7z" fill="#06070b" stroke="#56606e" stroke-width="2"/>
+      <path d="M101 51V20m0 0-8 12m8-12 8 12" fill="none" stroke="#a8f2ff" stroke-width="3" filter="url(#cyanGlow)"/>
+      <circle cx="101" cy="50" r="11" fill="none" stroke="#70dff7" stroke-width="2"/>
+      <path d="m48 68-18-25m117 22 22-29" stroke="#596272" stroke-width="5"/>
     </g>
   </symbol>
+
   <symbol id="mechazero" viewBox="0 0 200 200">
-    <g filter="url(#shadow)">
-      <path d="M35 179 45 72l35-30h48l31 33 7 104z" fill="url(#lime)" stroke="#e9ffa6" stroke-width="5"/>
-      <path d="m62 76 36-20 39 21-5 62-33 22-34-21z" fill="#17220d"/>
-      <path d="M73 94h52v22H73z" fill="#aaff2a"/>
-      <path d="m80 100 13 5-13 5zm37 0-13 5 13 5z" fill="#0a1600"/>
-      <path d="M92 127h17v19H92z" fill="#d7ff84"/>
-      <circle cx="47" cy="63" r="9" fill="#ff4e68"/>
+    <g filter="url(#hardShadow)">
+      <path d="M17 185 28 124 45 111 38 65 64 45 72 20h55l8 25 27 22-6 45 18 17 9 56z" fill="url(#gunmetal)" stroke="#77858c" stroke-width="3"/>
+      <path d="m54 79 28-28h39l28 29-7 78-41 29-43-29z" fill="url(#blacksteel)" stroke="#5f6c73" stroke-width="2"/>
+      <path d="m65 83 36-18 35 19-8 33-27 15-29-15z" fill="#06090b" stroke="#45545b" stroke-width="2"/>
+      <path d="M67 94h68l-8 22-26 8-27-8z" fill="#111a1c"/>
+      <path d="M75 99h19v9H75zm32 0h20v9h-20z" fill="#b6ff35" filter="url(#cyanGlow)"/>
+      <path d="m84 139 17-9 18 9-3 25-15 10-14-10z" fill="#0b1012" stroke="#67747a" stroke-width="2"/>
+      <path d="M93 146h16v12H93z" fill="#b8ff38"/>
+      <path d="M44 67 20 51m137 17 23-18M70 40 59 17m72 24 12-24" stroke="#839097" stroke-width="5"/>
+      <path d="M37 119h23m82 0h23" stroke="#b9ff35" stroke-width="3" filter="url(#cyanGlow)"/>
+      <circle cx="100" cy="45" r="8" fill="#b9ff35" filter="url(#cyanGlow)"/>
     </g>
   </symbol>
+
   <symbol id="cratercrab" viewBox="0 0 200 200">
-    <g filter="url(#shadow)">
-      <path d="M26 178 43 92 21 69l36-3 18-34 25 29 29-32 15 38 35 5-22 25 15 81z" fill="url(#amber)" stroke="#ffe1a0" stroke-width="5"/>
-      <path d="M55 105q45-46 91 0l-11 48H66z" fill="#47190d"/>
-      <path d="m68 100 23 8-21 9zm63 0-22 8 20 10z" fill="#fff046"/>
-      <path d="M92 129h18l-9 17z" fill="#ff5b2e"/>
-      <path d="m35 123-24 16 31 5m122-21 25 16-31 5" fill="none" stroke="#ff8b32" stroke-width="10" stroke-linecap="round"/>
+    <g filter="url(#hardShadow)">
+      <path d="M7 185 21 142 8 123 35 109 23 76 57 73 74 34 99 56 126 28 139 70 178 65 165 101 192 119 177 142 193 185Z" fill="#191315" stroke="#554044" stroke-width="3"/>
+      <path d="m42 103 26-34 34-13 36 15 24 34-16 60-44 22-47-21z" fill="url(#lava)" stroke="#7b3028" stroke-width="3"/>
+      <path d="m59 91 42-20 42 20-9 26-33 13-35-13z" fill="#1b0b0b"/>
+      <path d="m53 116 38 8-18 23-28-8zm97 0-39 8 19 23 28-9z" fill="#130d0e" stroke="#59302e" stroke-width="2"/>
+      <path d="m66 121 20 5-13 11-14-5zm70 0-20 5 13 11 14-5z" fill="#ffb13b" filter="url(#redGlow)"/>
+      <path d="m82 150 19-12 20 12-6 21-14 7-14-7z" fill="#12090a"/>
+      <path d="m26 115-20-18m168 18 20-18M40 145 8 165m154-20 31 20" fill="none" stroke="#772d26" stroke-width="9"/>
+      <path d="m79 65 10-31m26 31 11-34" stroke="#ff643f" stroke-width="3" filter="url(#redGlow)"/>
     </g>
   </symbol>
+
   <symbol id="rockethop" viewBox="0 0 200 200">
-    <g filter="url(#shadow)">
-      <path d="M42 179 50 83 74 41l27-15 28 16 23 44 8 93z" fill="url(#ice)" stroke="#eaffff" stroke-width="5"/>
-      <path d="M68 68q32-24 64 0l-8 81-23 18-25-18z" fill="#132b3b"/>
-      <path d="M68 94h65l-8 25H75z" fill="#8ffff7"/>
-      <path d="m87 124 14-10 13 10-13 12z" fill="#ffad27"/>
-      <path d="M48 88 22 106l25 16m105-34 27 18-25 16" fill="none" stroke="#67dbe3" stroke-width="11" stroke-linecap="round"/>
+    <g filter="url(#hardShadow)">
+      <path d="M22 185 31 125 49 107 42 72 67 55 78 22h47l11 32 25 18-7 36 18 20 8 57z" fill="url(#bone)" stroke="#9ca7a8" stroke-width="3"/>
+      <path d="m56 79 31-27h30l29 28-7 80-38 27-40-27z" fill="#13202a" stroke="#5c6b71" stroke-width="2"/>
+      <path d="m65 86 36-18 35 18-7 32-28 13-29-13z" fill="#070d12"/>
+      <path d="M68 95h66l-8 21-25 8-26-8z" fill="#101a21"/>
+      <path d="M75 99h20v10H75zm32 0h20v10h-20z" fill="#9cf8ff" filter="url(#cyanGlow)"/>
+      <path d="m86 140 15-10 16 10-4 23-12 9-13-9z" fill="#080c10" stroke="#647178" stroke-width="2"/>
+      <path d="m94 146 7 8 7-8" fill="none" stroke="#e0e3df" stroke-width="3"/>
+      <path d="M47 81 18 96l24 17m113-32 28 15-24 17" fill="none" stroke="#6d7b80" stroke-width="8"/>
+      <path d="m54 139-22 34m116-34 21 34" stroke="#66e7f2" stroke-width="3" filter="url(#cyanGlow)"/>
     </g>
   </symbol>
 </svg>
