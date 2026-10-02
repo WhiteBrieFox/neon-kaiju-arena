@@ -1,6 +1,8 @@
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Activity,
+  BookOpen,
+  Bot,
   Bolt,
   Check,
   ChevronRight,
@@ -12,6 +14,8 @@ import {
   DoorOpen,
   Heart,
   LogIn,
+  LogOut,
+  Layers3,
   Radio,
   RefreshCcw,
   RotateCcw,
@@ -20,7 +24,11 @@ import {
   Skull,
   Sparkles,
   Swords,
+  Trash2,
+  UserPlus,
   Users,
+  Volume2,
+  VolumeX,
   Wifi,
   WifiOff,
   X
@@ -33,6 +41,7 @@ import type {
   CommandEnvelope,
   DieFace,
   GameCommand,
+  MonsterSkill,
   MonsterId,
   PlayerState,
   PowerCard,
@@ -41,12 +50,16 @@ import type {
   SocketAck
 } from "../shared/types";
 import { MONSTERS } from "../shared/types";
+import { getSkillChoices } from "../shared/skills";
+import { getCardCost } from "../shared/engine";
 
 const STORAGE_KEY = "neon-kaiju-session";
+const AUDIO_ENABLED_KEY = "neon-kaiju-audio-enabled";
 
 type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 type MonsterArtVariant = "portrait" | "full";
 type CombatVfxKind = "electric" | "explosion" | "impact";
+type SoundEffect = "attack" | "dice" | "heal";
 
 const socket: GameSocket = io({
   autoConnect: true,
@@ -96,6 +109,14 @@ const VFX_ASSETS: Record<CombatVfxKind, string> = {
   impact: "/impact-vfx-sheet.png"
 };
 
+const AUDIO_ASSETS = {
+  menu: "/audio/menu-rain-tactics.m4a",
+  game: "/audio/game-tokyo-undercurrent.m4a",
+  attack: "/audio/claw-attack-a.wav",
+  dice: "/audio/dice-hit-a.wav",
+  heal: "/audio/heal-a.wav"
+} as const;
+
 const RANDOM_NAME_PREFIXES = [
   "暴走",
   "闪电",
@@ -137,6 +158,106 @@ function randomPlayerName(previous = "") {
     if (candidate !== previous) return candidate;
   }
   return "暴走团子";
+}
+
+function useGameAudio(state: ClientGameState | null) {
+  const [enabled, setEnabled] = useState(
+    () => localStorage.getItem(AUDIO_ENABLED_KEY) !== "false"
+  );
+  const enabledRef = useRef(enabled);
+  const unlockedRef = useRef(false);
+  const bgmRef = useRef<HTMLAudioElement | null>(null);
+  const sfxRef = useRef<Record<SoundEffect, HTMLAudioElement> | null>(null);
+  const previousStateRef = useRef<ClientGameState | null>(null);
+  const bgmSource = state && state.phase !== "lobby" ? AUDIO_ASSETS.game : AUDIO_ASSETS.menu;
+
+  const playEffect = useCallback((effect: SoundEffect) => {
+    if (!enabledRef.current || !unlockedRef.current) return;
+    const source = sfxRef.current?.[effect];
+    if (!source) return;
+    const sound = source.cloneNode() as HTMLAudioElement;
+    sound.volume = effect === "attack" ? 0.72 : 0.62;
+    void sound.play().catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    const bgm = new Audio();
+    bgm.loop = true;
+    bgm.preload = "auto";
+    bgm.volume = 0.2;
+    bgmRef.current = bgm;
+    sfxRef.current = {
+      attack: new Audio(AUDIO_ASSETS.attack),
+      dice: new Audio(AUDIO_ASSETS.dice),
+      heal: new Audio(AUDIO_ASSETS.heal)
+    };
+    Object.values(sfxRef.current).forEach((sound) => {
+      sound.preload = "auto";
+    });
+
+    const unlock = () => {
+      unlockedRef.current = true;
+      if (enabledRef.current) void bgm.play().catch(() => undefined);
+    };
+    window.addEventListener("pointerdown", unlock, { once: true });
+
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      bgm.pause();
+      bgmRef.current = null;
+      sfxRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const bgm = bgmRef.current;
+    if (!bgm) return;
+    if (!bgm.src.endsWith(bgmSource)) {
+      bgm.src = bgmSource;
+      bgm.currentTime = 0;
+    }
+    if (enabled && unlockedRef.current) void bgm.play().catch(() => undefined);
+    else bgm.pause();
+  }, [bgmSource, enabled]);
+
+  useEffect(() => {
+    enabledRef.current = enabled;
+    localStorage.setItem(AUDIO_ENABLED_KEY, String(enabled));
+  }, [enabled]);
+
+  useEffect(() => {
+    const previous = previousStateRef.current;
+    previousStateRef.current = state;
+    if (!state || !previous || state.id !== previous.id || state.revision === previous.revision) {
+      return;
+    }
+
+    if (
+      state.currentPlayerId === previous.currentPlayerId &&
+      state.rollCount > previous.rollCount
+    ) {
+      playEffect("dice");
+    }
+
+    if (
+      state.players.some((player) => {
+        const oldPlayer = previous.players.find((item) => item.id === player.id);
+        return oldPlayer && player.hp > oldPlayer.hp;
+      })
+    ) {
+      playEffect("heal");
+    }
+
+    const lastLogId = previous.log.at(-1)?.id ?? 0;
+    if (state.log.some((entry) => entry.id > lastLogId && /受到.+的攻击/.test(entry.text))) {
+      playEffect("attack");
+    }
+  }, [playEffect, state]);
+
+  return {
+    enabled,
+    toggle: () => setEnabled((current) => !current)
+  };
 }
 
 const cutoutCache = new Map<string, Promise<string>>();
@@ -331,12 +452,14 @@ function PlayerPanel({
   player,
   active,
   inTokyo,
-  isSelf
+  isSelf,
+  onInspect
 }: {
   player: PlayerState;
   active: boolean;
   inTokyo: boolean;
   isSelf: boolean;
+  onInspect: () => void;
 }) {
   const selectedMonster = playerMonster(player);
   const monster = monsterById(selectedMonster);
@@ -359,10 +482,12 @@ function PlayerPanel({
         <div className="player-name-row">
           <strong>{player.name}</strong>
           {player.isHost && <Crown size={13} aria-label="房主" />}
+          {player.isBot && <span className="bot-tag">AI</span>}
           {isSelf && <span className="you-tag">你</span>}
         </div>
         <span className="monster-title">{monster.name}</span>
         <div className="stats-row">
+          <span className="level-stat">LV.{player.level}</span>
           <Stat icon={<Heart size={14} />} value={player.hp} tone="hp" label="生命" />
           <Stat icon={<Crown size={14} />} value={player.vp} tone="vp" label="胜利分" />
           <Stat icon={<Bolt size={14} />} value={player.energy} tone="energy" label="能量" />
@@ -374,6 +499,16 @@ function PlayerPanel({
           </div>
         )}
       </div>
+      <button
+        type="button"
+        className="player-loadout-button"
+        onClick={onInspect}
+        title={`查看${player.name}的能力`}
+        aria-label={`查看${player.name}的能力`}
+      >
+        <Layers3 />
+        <span>{player.skills.length + player.cards.length}</span>
+      </button>
       {active && <motion.span layoutId="active-turn" className="turn-pulse" />}
     </motion.article>
   );
@@ -400,7 +535,6 @@ function DiceTray({
     () => [...new Set(state.dice.filter((die) => !die.resolved).map((die) => die.face))],
     [state.dice]
   );
-
   return (
     <section className="dice-console">
       <div className="dice-header">
@@ -409,6 +543,7 @@ function DiceTray({
           <h2>
             {state.phase === "rolling" && (isTurn ? "选择命运" : "等待掷骰")}
             {state.phase === "resolving" && (isTurn ? "选择结算顺序" : "正在结算")}
+            {state.phase === "choosingSkill" && "怪兽正在进化"}
             {state.phase === "yielding" && "东京攻防决策"}
             {state.phase === "buying" && (isTurn ? "整备与升级" : "对手正在购买")}
           </h2>
@@ -545,11 +680,13 @@ function TokyoSlot({
 
 function CardView({
   card,
+  cost,
   affordable,
   disabled,
   onBuy
 }: {
   card: PowerCard;
+  cost: number;
   affordable: boolean;
   disabled: boolean;
   onBuy: () => void;
@@ -566,7 +703,8 @@ function CardView({
       <div className="card-topline">
         <span className="card-type">{card.type === "keep" ? "持续" : "立即"}</span>
         <span className={`card-cost ${affordable ? "" : "unaffordable"}`}>
-          <Bolt size={14} fill="currentColor" /> {card.cost}
+          {cost < card.cost && <del>{card.cost}</del>}
+          <Bolt size={14} fill="currentColor" /> {cost}
         </span>
       </div>
       <h3>{card.name}</h3>
@@ -581,11 +719,19 @@ function CardView({
 function Lobby({
   state,
   identity,
-  onCommand
+  actionPending,
+  onCommand,
+  onAddBot,
+  onRemoveBot,
+  onLeave
 }: {
   state: ClientGameState;
   identity: RoomIdentity;
+  actionPending: boolean;
   onCommand: (command: GameCommand) => void;
+  onAddBot: () => void;
+  onRemoveBot: (playerId: string) => void;
+  onLeave: () => void;
 }) {
   const self = state.players.find((item) => item.id === identity.playerId);
   const [variant, setVariant] = useState(true);
@@ -621,6 +767,15 @@ function Lobby({
               <Copy size={17} />
               <span>复制链接</span>
             </button>
+            <button
+              className="leave-room-button"
+              onClick={onLeave}
+              title="退出房间"
+              aria-label="退出房间"
+            >
+              <LogOut size={17} />
+              <span>退出</span>
+            </button>
           </section>
         </header>
         <div className="lobby-workspace">
@@ -630,6 +785,16 @@ function Lobby({
                 <span className="eyebrow">ROOM ROSTER</span>
                 <h2>作战成员</h2>
               </div>
+              {self?.isHost && (
+                <button
+                  className="add-bot-button"
+                  onClick={onAddBot}
+                  disabled={actionPending || state.players.length >= 6}
+                >
+                  <UserPlus size={15} />
+                  添加人机
+                </button>
+              )}
               <span className="player-count"><Users size={15} /> {state.players.length} / 6</span>
             </div>
             <div className="lobby-grid">
@@ -674,6 +839,9 @@ function Lobby({
                       <div>
                         <strong>{participant.name}</strong>
                         {participant.isHost && <Crown size={13} aria-label="房主" />}
+                        {participant.isBot && (
+                          <span className="bot-tag"><Bot size={11} /> AI</span>
+                        )}
                       </div>
                       <span>{monster ? monster.name : "正在选择怪兽"}</span>
                     </div>
@@ -681,6 +849,16 @@ function Lobby({
                       {participant.ready ? <Check size={13} /> : <Clock3 size={13} />}
                       {participant.ready ? "已准备" : "未准备"}
                     </div>
+                    {self?.isHost && participant.isBot && (
+                      <button
+                        className="remove-bot-button"
+                        onClick={() => onRemoveBot(participant.id)}
+                        title={`移除${participant.name}`}
+                        aria-label={`移除${participant.name}`}
+                      >
+                        <Trash2 />
+                      </button>
+                    )}
                   </motion.div>
                 );
               })}
@@ -705,7 +883,7 @@ function Lobby({
                     key={monster.id}
                     className={selected ? "selected" : ""}
                     style={{ "--monster-color": monster.colors[0] } as React.CSSProperties}
-                    disabled={unavailable}
+                    disabled={actionPending || unavailable}
                     onClick={() =>
                       onCommand({ type: "SELECT_MONSTER", monster: monster.id })
                     }
@@ -736,7 +914,7 @@ function Lobby({
               )}
               <button
                 className={`ready-button ${self?.ready ? "is-ready" : ""}`}
-                disabled={!self?.monster}
+                disabled={actionPending || !self?.monster}
                 onClick={() => onCommand({ type: "SET_READY", ready: !self?.ready })}
               >
                 {self?.ready ? <RotateCcw /> : <Check />}
@@ -745,7 +923,7 @@ function Lobby({
               {self?.isHost ? (
                 <button
                   className="primary-action launch"
-                  disabled={!allReady}
+                  disabled={actionPending || !allReady}
                   onClick={() => onCommand({ type: "START_GAME", twoPlayerVariant: variant })}
                 >
                   <Swords /> 开始游戏
@@ -768,6 +946,140 @@ function Lobby({
         </div>
       </div>
     </main>
+  );
+}
+
+function PlayerDetailsModal({
+  player,
+  onClose
+}: {
+  player: PlayerState;
+  onClose: () => void;
+}) {
+  const monster = monsterById(playerMonster(player));
+  return (
+    <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <motion.div
+        className="player-details-modal"
+        initial={{ scale: 0.9, y: 20 }}
+        animate={{ scale: 1, y: 0 }}
+      >
+        <button className="icon-button modal-close" onClick={onClose} title="关闭"><X /></button>
+        <header className="loadout-heading">
+          <MonsterArt monster={playerMonster(player)} size={76} />
+          <div>
+            <span className="eyebrow">LV.{player.level} LOADOUT</span>
+            <h2>{player.name}</h2>
+            <p>{monster.name} · {monster.title}</p>
+          </div>
+        </header>
+        <section className="loadout-section">
+          <h3>进化技能 <span>{player.skills.length}</span></h3>
+          <div className="loadout-list">
+            {player.skills.length ? player.skills.map((skill) => (
+              <article className="loadout-item skill" key={skill.id}>
+                <span>LV.{skill.tier}</span>
+                <div><strong>{skill.name}</strong><p>{skill.text}</p></div>
+              </article>
+            )) : <p className="loadout-empty">尚未学习进化技能</p>}
+          </div>
+        </section>
+        <section className="loadout-section">
+          <h3>保留卡牌 <span>{player.cards.length}</span></h3>
+          <div className="loadout-list">
+            {player.cards.length ? player.cards.map((card) => (
+              <article className={`loadout-item card accent-${card.accent}`} key={card.id}>
+                <span><Bolt size={12} />{card.cost}</span>
+                <div><strong>{card.name}</strong><p>{card.text}</p></div>
+              </article>
+            )) : <p className="loadout-empty">没有保留卡牌</p>}
+          </div>
+        </section>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function SkillChoiceModal({
+  tier,
+  poolSkillIds,
+  claimedSkillIds,
+  onChoose
+}: {
+  tier: 3 | 6 | 10;
+  poolSkillIds: string[];
+  claimedSkillIds: string[];
+  onChoose: (skill: MonsterSkill) => void;
+}) {
+  const choices = getSkillChoices(tier, claimedSkillIds, poolSkillIds);
+  return (
+    <motion.div className="modal-backdrop skill-choice-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <motion.div
+        className="skill-choice-modal"
+        initial={{ scale: 0.82, y: 30 }}
+        animate={{ scale: 1, y: 0 }}
+      >
+        <span className="eyebrow">SHARED EVOLUTION POOL</span>
+        <h2>等级 {tier} · 选择公共技能</h2>
+        <p className="skill-pool-status">本局剩余 {choices.length} 个技能，选择后不会补充</p>
+        <div className="skill-choice-grid">
+          {choices.map((skill) => (
+            <button key={skill.id} onClick={() => onChoose(skill)}>
+              <span>LV.{tier}</span>
+              <Sparkles />
+              <strong>{skill.name}</strong>
+              <p>{skill.text}</p>
+            </button>
+          ))}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function RulesModal({ onClose }: { onClose: () => void }) {
+  return (
+    <motion.div className="modal-backdrop rules-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <motion.div className="rules-modal" initial={{ scale: 0.94, y: 18 }} animate={{ scale: 1, y: 0 }}>
+        <button className="icon-button modal-close" onClick={onClose} title="关闭"><X /></button>
+        <span className="eyebrow">COMBAT MANUAL</span>
+        <h2>作战规则</h2>
+        <div className="rules-grid">
+          <section>
+            <strong>胜利</strong>
+            <p>达到 20 胜利分并存活，或成为最后一只存活的怪兽。</p>
+          </section>
+          <section>
+            <strong>掷骰</strong>
+            <p>每回合最多掷 3 次。可保留任意骰子，再重掷其余骰子。</p>
+          </section>
+          <section>
+            <strong>数字与升级</strong>
+            <p>三个相同数字可得分；至少三个 1 同时提升 2 级，至少三个 2 同时提升 1 级。</p>
+          </section>
+          <section>
+            <strong>进化技能</strong>
+            <p>怪兽从 0 级开始；达到或跨过 3、6、10 级时，从该等级尚未被选走的公共技能中选择一项。</p>
+          </section>
+          <section>
+            <strong>攻击与治疗</strong>
+            <p>攻击东京内或东京外的敌人。东京内无法用治疗骰恢复生命。</p>
+          </section>
+          <section>
+            <strong>东京</strong>
+            <p>进入东京获得奖励；只有受到攻击骰伤害后，才能选择撤离。</p>
+          </section>
+          <section>
+            <strong>能量卡牌</strong>
+            <p>立即卡购买后生效；保留卡持续生效，并对所有玩家公开。</p>
+          </section>
+          <section>
+            <strong>双人规则</strong>
+            <p>进入东京获得 1 能量；在东京开始回合获得 1 胜利分。</p>
+          </section>
+        </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
@@ -812,20 +1124,28 @@ function GameBoard({
   state,
   identity,
   connected,
-  onCommand
+  onCommand,
+  onLeave
 }: {
   state: ClientGameState;
   identity: RoomIdentity;
   connected: boolean;
   onCommand: (command: GameCommand) => void;
+  onLeave: () => void;
 }) {
   const [targetCard, setTargetCard] = useState<PowerCard | null>(null);
+  const [inspectedPlayerId, setInspectedPlayerId] = useState<string | null>(null);
   const self = state.players.find((item) => item.id === identity.playerId)!;
   const current = state.players.find((item) => item.id === state.currentPlayerId);
   const city = state.players.find((item) => item.id === state.tokyoCity);
   const bay = state.players.find((item) => item.id === state.tokyoBay);
   const isTurn = state.currentPlayerId === identity.playerId;
   const mustYield = state.phase === "yielding" && state.pendingYields[0] === identity.playerId;
+  const mustChooseSkill =
+    state.phase === "choosingSkill" &&
+    state.pendingSkillPlayerId === identity.playerId &&
+    state.pendingSkillTier;
+  const inspectedPlayer = state.players.find((player) => player.id === inspectedPlayerId);
   const latestLog = state.log[state.log.length - 1];
   const [combatVfx, setCombatVfx] = useState<{
     key: number;
@@ -873,6 +1193,9 @@ function GameBoard({
             {connected ? "已同步" : "重连中"}
           </span>
           <code>{state.code}</code>
+          <button className="header-icon-button" onClick={onLeave} title="退出对局" aria-label="退出对局">
+            <LogOut size={17} />
+          </button>
         </div>
       </header>
 
@@ -884,6 +1207,7 @@ function GameBoard({
             active={state.currentPlayerId === participant.id}
             inTokyo={participant.id === state.tokyoCity || participant.id === state.tokyoBay}
             isSelf={participant.id === identity.playerId}
+            onInspect={() => setInspectedPlayerId(participant.id)}
           />
         ))}
       </section>
@@ -919,15 +1243,19 @@ function GameBoard({
             <span className="deck-count">{state.deckSize} <small>牌库</small></span>
           </div>
           <div className="card-stack">
-            {state.market.map((card) => (
-              <CardView
-                key={card.id}
-                card={card}
-                affordable={self.energy >= card.cost}
-                disabled={!isTurn || state.phase !== "buying" || self.energy < card.cost}
-                onBuy={() => buy(card)}
-              />
-            ))}
+            {state.market.map((card) => {
+              const cost = getCardCost(self, card);
+              return (
+                <CardView
+                  key={card.id}
+                  card={card}
+                  cost={cost}
+                  affordable={self.energy >= cost}
+                  disabled={!isTurn || state.phase !== "buying" || self.energy < cost}
+                  onBuy={() => buy(card)}
+                />
+              );
+            })}
           </div>
           <button
             className="sweep-button"
@@ -977,6 +1305,28 @@ function GameBoard({
       </AnimatePresence>
 
       <AnimatePresence>
+        {inspectedPlayer && (
+          <PlayerDetailsModal
+            player={inspectedPlayer}
+            onClose={() => setInspectedPlayerId(null)}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {mustChooseSkill && (
+          <SkillChoiceModal
+            tier={mustChooseSkill}
+            poolSkillIds={state.skillPool[mustChooseSkill]}
+            claimedSkillIds={state.players.flatMap((player) =>
+              player.skills.map((skill) => skill.id)
+            )}
+            onChoose={(skill) => onCommand({ type: "CHOOSE_SKILL", skillId: skill.id })}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {state.phase === "finished" && (
           <motion.div className="victory-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
             <motion.div initial={{ scale: 0.5 }} animate={{ scale: 1 }} transition={{ type: "spring" }}>
@@ -988,7 +1338,7 @@ function GameBoard({
                   : "东京化为废墟"}
               </h1>
               <p>{state.winnerIds.length ? "新的城市霸主已经诞生" : "没有怪兽活着离开"}</p>
-              <button className="primary-action" onClick={() => location.reload()}>返回大厅</button>
+              <button className="primary-action" onClick={onLeave}>返回首页</button>
             </motion.div>
           </motion.div>
         )}
@@ -1125,7 +1475,10 @@ export default function App() {
   });
   const [state, setState] = useState<ClientGameState | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [actionPending, setActionPending] = useState(false);
   const toastTimer = useRef<number | null>(null);
+  const audio = useGameAudio(state);
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -1148,8 +1501,14 @@ export default function App() {
         });
       }
     };
-    const onDisconnect = () => setConnected(false);
-    const onState = (next: ClientGameState) => setState(next);
+    const onDisconnect = () => {
+      setConnected(false);
+      setActionPending(false);
+    };
+    const onState = (next: ClientGameState) => {
+      setState(next);
+      setActionPending(false);
+    };
     const onError = (message: string) => showToast(message);
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
@@ -1183,33 +1542,115 @@ export default function App() {
 
   const sendCommand = useCallback(
     (command: GameCommand) => {
-      if (!identity || !state) return;
+      if (!identity || !state || actionPending) return;
+      setActionPending(true);
       const envelope: CommandEnvelope = {
         commandId: crypto.randomUUID(),
         expectedRevision: state.revision,
         command
       };
       socket.emit("command", envelope, (response) => {
-        if (!response.ok) showToast(response.error ?? "操作失败");
+        if (!response.ok) {
+          setActionPending(false);
+          showToast(response.error ?? "操作失败");
+        }
       });
     },
-    [identity, showToast, state]
+    [actionPending, identity, showToast, state]
   );
+
+  const addBot = useCallback(() => {
+    if (actionPending) return;
+    setActionPending(true);
+    socket.emit("addBot", (response) => {
+      if (!response.ok) {
+        setActionPending(false);
+        showToast(response.error ?? "添加人机失败");
+      }
+    });
+  }, [actionPending, showToast]);
+
+  const removeBotPlayer = useCallback(
+    (playerId: string) => {
+      if (actionPending) return;
+      setActionPending(true);
+      socket.emit("removeBot", { playerId }, (response) => {
+        if (!response.ok) {
+          setActionPending(false);
+          showToast(response.error ?? "移除人机失败");
+        }
+      });
+    },
+    [actionPending, showToast]
+  );
+
+  const leaveRoom = useCallback(() => {
+    if (
+      state &&
+      state.phase !== "lobby" &&
+      state.phase !== "finished" &&
+      !window.confirm("退出后将由人机接管你的怪兽，确定退出？")
+    ) {
+      return;
+    }
+    socket.emit("leaveRoom", (response) => {
+      if (!response.ok) {
+        showToast(response.error ?? "退出房间失败");
+        return;
+      }
+      localStorage.removeItem(STORAGE_KEY);
+      history.replaceState({}, "", location.pathname);
+      setIdentity(null);
+      setState(null);
+    });
+  }, [showToast, state?.phase]);
 
   return (
     <>
+      <div className="global-controls">
+        <button
+          type="button"
+          className="rules-toggle"
+          onClick={() => setRulesOpen(true)}
+        >
+          <BookOpen />
+          <span>规则</span>
+        </button>
+        <button
+          type="button"
+          className="audio-toggle"
+          onClick={audio.toggle}
+          title={audio.enabled ? "关闭声音" : "开启声音"}
+          aria-label={audio.enabled ? "关闭声音" : "开启声音"}
+          aria-pressed={audio.enabled}
+        >
+          {audio.enabled ? <Volume2 /> : <VolumeX />}
+        </button>
+      </div>
       {!identity || !state ? (
         <Welcome connected={connected} onEnter={enterRoom} />
       ) : state.phase === "lobby" ? (
-        <Lobby state={state} identity={identity} onCommand={sendCommand} />
+        <Lobby
+          state={state}
+          identity={identity}
+          actionPending={actionPending}
+          onCommand={sendCommand}
+          onAddBot={addBot}
+          onRemoveBot={removeBotPlayer}
+          onLeave={leaveRoom}
+        />
       ) : (
         <GameBoard
           state={state}
           identity={identity}
           connected={connected}
           onCommand={sendCommand}
+          onLeave={leaveRoom}
         />
       )}
+      <AnimatePresence>
+        {rulesOpen && <RulesModal onClose={() => setRulesOpen(false)} />}
+      </AnimatePresence>
       <AnimatePresence>
         {toast && (
           <motion.div

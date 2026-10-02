@@ -12,18 +12,23 @@ import {
   cloneGame,
   createGame,
   dispatch,
+  leavePlayer,
+  removeBot,
   RuleError,
   setConnected,
   toClientState
 } from "../shared/engine";
+import { chooseBotCommand } from "../shared/bot";
 import type {
   ClientToServerEvents,
   CommandEnvelope,
   GameState,
+  MonsterId,
   RoomIdentity,
   ServerToClientEvents,
   SocketAck
 } from "../shared/types";
+import { MONSTERS } from "../shared/types";
 
 const port = Number(process.env.PORT ?? 3001);
 const host = process.env.HOST ?? "0.0.0.0";
@@ -38,10 +43,12 @@ interface Room {
   state: GameState;
   sessions: Map<string, PlayerSession>;
   commandIds: Set<string>;
+  botTimer?: ReturnType<typeof setTimeout>;
 }
 
 const rooms = new Map<string, Room>();
 const socketIdentity = new Map<string, RoomIdentity>();
+const botNames = ["钢牙", "小核弹", "夜行者", "重拳", "电光仔", "冰箱王"];
 
 const playerInputSchema = z.object({
   name: z.string().trim().min(1).max(18)
@@ -78,6 +85,58 @@ function token() {
 
 function emitState(io: Server<ClientToServerEvents, ServerToClientEvents>, room: Room) {
   io.to(room.state.code).emit("state", toClientState(room.state));
+}
+
+function actingBot(state: GameState) {
+  if (state.phase === "yielding") {
+    return state.players.find(
+      (item) => item.id === state.pendingYields[0] && item.isBot
+    );
+  }
+  return state.players.find(
+    (item) => item.id === state.currentPlayerId && item.isBot
+  );
+}
+
+function scheduleBotAction(
+  io: Server<ClientToServerEvents, ServerToClientEvents>,
+  room: Room
+) {
+  if (room.botTimer || !actingBot(room.state)) return;
+  room.botTimer = setTimeout(() => {
+    room.botTimer = undefined;
+    const bot = actingBot(room.state);
+    if (!bot) return;
+    const command = chooseBotCommand(room.state, bot.id);
+    if (!command) return;
+
+    try {
+      const next = cloneGame(room.state);
+      dispatch(next, bot.id, command);
+      room.state = next;
+      emitState(io, room);
+      scheduleBotAction(io, room);
+    } catch (error) {
+      console.error(`Bot action failed in room ${room.state.code}:`, error);
+    }
+  }, 700);
+}
+
+function roomForSocket(socketId: string) {
+  const identity = socketIdentity.get(socketId);
+  if (!identity) throw new RuleError("请先加入房间");
+  const room = rooms.get(identity.roomCode);
+  if (!room) throw new RuleError("房间不存在");
+  return { identity, room };
+}
+
+function nextBotIdentity(state: GameState) {
+  const selected = new Set(state.players.map((item) => item.monster));
+  const monster = MONSTERS.find((item) => !selected.has(item.id))?.id;
+  if (!monster) throw new RuleError("没有可用的怪兽");
+  const usedNames = new Set(state.players.map((item) => item.name));
+  const baseName = botNames.find((name) => !usedNames.has(name)) ?? `人机${state.players.length}`;
+  return { name: baseName, monster: monster as MonsterId };
 }
 
 app.get("/health", async () => ({ ok: true, rooms: rooms.size }));
@@ -168,6 +227,59 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("addBot", (ack: (response: SocketAck) => void) => {
+    try {
+      const { identity, room } = roomForSocket(socket.id);
+      const actor = room.state.players.find((item) => item.id === identity.playerId);
+      if (!actor?.isHost) throw new RuleError("只有房主可以添加人机");
+      const bot = nextBotIdentity(room.state);
+      addPlayer(room.state, {
+        id: randomUUID(),
+        name: bot.name,
+        monster: bot.monster,
+        isHost: false,
+        isBot: true
+      });
+      ack({ ok: true });
+      emitState(io, room);
+    } catch (error) {
+      ack({ ok: false, error: error instanceof Error ? error.message : "添加人机失败" });
+    }
+  });
+
+  socket.on("removeBot", (raw, ack: (response: SocketAck) => void) => {
+    try {
+      const data = z.object({ playerId: z.string().uuid() }).parse(raw);
+      const { identity, room } = roomForSocket(socket.id);
+      removeBot(room.state, identity.playerId, data.playerId);
+      ack({ ok: true });
+      emitState(io, room);
+    } catch (error) {
+      ack({ ok: false, error: error instanceof Error ? error.message : "移除人机失败" });
+    }
+  });
+
+  socket.on("leaveRoom", (ack: (response: SocketAck) => void) => {
+    try {
+      const { identity, room } = roomForSocket(socket.id);
+      room.sessions.delete(identity.playerId);
+      socketIdentity.delete(socket.id);
+      socket.leave(identity.roomCode);
+
+      if (room.sessions.size === 0) {
+        if (room.botTimer) clearTimeout(room.botTimer);
+        rooms.delete(identity.roomCode);
+      } else {
+        leavePlayer(room.state, identity.playerId);
+        emitState(io, room);
+        scheduleBotAction(io, room);
+      }
+      ack({ ok: true });
+    } catch (error) {
+      ack({ ok: false, error: error instanceof Error ? error.message : "退出房间失败" });
+    }
+  });
+
   socket.on("command", (raw, ack: (response: SocketAck) => void) => {
     const identity = socketIdentity.get(socket.id);
     if (!identity) {
@@ -198,6 +310,7 @@ io.on("connection", (socket) => {
       }
       ack({ ok: true });
       emitState(io, room);
+      scheduleBotAction(io, room);
     } catch (error) {
       const message = error instanceof Error ? error.message : "操作失败";
       ack({ ok: false, error: message });

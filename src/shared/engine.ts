@@ -1,4 +1,5 @@
 import { createDeck } from "./cards";
+import { getSkillById, getSkillChoices } from "./skills";
 import type {
   CardEffect,
   ClientGameState,
@@ -10,6 +11,7 @@ import type {
   PlayerState,
   PowerCard
 } from "./types";
+import type { SkillTier } from "./types";
 
 export class RuleError extends Error {}
 
@@ -63,7 +65,7 @@ function assertTurn(state: GameState, playerId: string) {
 }
 
 function passiveAmount(target: PlayerState, passive: Extract<CardEffect, { kind: "passive" }>["passive"]) {
-  return target.cards.reduce(
+  return [...target.cards, ...target.skills].reduce(
     (sum, card) =>
       sum +
       card.effects.reduce(
@@ -205,7 +207,13 @@ function markFaceResolved(state: GameState, face: DieFace, oneOnly = false) {
 }
 
 function finishResolutionIfReady(state: GameState) {
-  if (!allDiceResolved(state) || state.pendingYields.length > 0) return;
+  if (
+    state.phase !== "resolving" ||
+    !allDiceResolved(state) ||
+    state.pendingYields.length > 0
+  ) {
+    return;
+  }
   enterTokyo(state, currentPlayer(state));
   state.phase = "buying";
 }
@@ -316,7 +324,11 @@ function winnerCheck(state: GameState) {
 export function createGame(
   id: string,
   code: string,
-  players: Array<Pick<PlayerState, "id" | "name" | "monster" | "isHost">>,
+  players: Array<
+    Pick<PlayerState, "id" | "name" | "monster" | "isHost"> & {
+      isBot?: boolean;
+    }
+  >,
   seed = Date.now()
 ): GameState {
   const state: GameState = {
@@ -327,6 +339,7 @@ export function createGame(
     round: 1,
     players: players.map((item) => ({
       ...item,
+      isBot: item.isBot ?? false,
       ready: item.monster !== null,
       hp: 10,
       maxHp: 10,
@@ -334,6 +347,8 @@ export function createGame(
       energy: 0,
       alive: true,
       connected: true,
+      level: 0,
+      skills: [],
       cards: [],
       poison: 0,
       shrink: 0
@@ -349,7 +364,10 @@ export function createGame(
     deck: [],
     discard: [],
     market: [],
+    skillPool: { 3: [], 6: [], 10: [] },
     pendingYields: [],
+    pendingSkillPlayerId: null,
+    pendingSkillTier: null,
     resumePhase: null,
     winnerIds: [],
     extraTurn: false,
@@ -361,7 +379,9 @@ export function createGame(
 
 export function addPlayer(
   state: GameState,
-  data: Pick<PlayerState, "id" | "name" | "monster" | "isHost">
+  data: Pick<PlayerState, "id" | "name" | "monster" | "isHost"> & {
+    isBot?: boolean;
+  }
 ) {
   if (state.phase !== "lobby") throw new RuleError("游戏已经开始");
   if (state.players.length >= 6) throw new RuleError("房间已满");
@@ -370,6 +390,7 @@ export function addPlayer(
   }
   state.players.push({
     ...data,
+    isBot: data.isBot ?? false,
     ready: data.monster !== null,
     hp: 10,
     maxHp: 10,
@@ -377,12 +398,46 @@ export function addPlayer(
     energy: 0,
     alive: true,
     connected: true,
+    level: 0,
+    skills: [],
     cards: [],
     poison: 0,
     shrink: 0
   });
   state.revision += 1;
   log(state, `${data.name} 加入了房间`);
+}
+
+export function removeBot(state: GameState, actorId: string, botId: string) {
+  if (state.phase !== "lobby") throw new RuleError("游戏已经开始");
+  const actor = player(state, actorId);
+  if (!actor.isHost) throw new RuleError("只有房主可以移除人机");
+  const target = player(state, botId);
+  if (!target.isBot) throw new RuleError("只能移除人机玩家");
+  state.players = state.players.filter((item) => item.id !== botId);
+  state.revision += 1;
+  log(state, `${target.name} 已离开房间`);
+}
+
+export function leavePlayer(state: GameState, playerId: string) {
+  const target = player(state, playerId);
+  if (state.phase !== "lobby" && state.phase !== "finished") {
+    target.isBot = true;
+    target.connected = true;
+    target.isHost = false;
+    state.revision += 1;
+    log(state, `${target.name} 已离开，由人机接管`);
+    return;
+  }
+
+  const wasHost = target.isHost;
+  state.players = state.players.filter((item) => item.id !== playerId);
+  if (wasHost && state.players.length > 0) {
+    const nextHost = state.players.find((item) => !item.isBot) ?? state.players[0];
+    nextHost.isHost = true;
+  }
+  state.revision += 1;
+  log(state, `${target.name} 已离开房间`);
 }
 
 export function setConnected(state: GameState, playerId: string, connected: boolean) {
@@ -427,6 +482,12 @@ export function dispatch(state: GameState, playerId: string, command: GameComman
     state.twoPlayerVariant = state.players.length === 2 && command.twoPlayerVariant !== false;
     state.deck = shuffle(state, createDeck());
     refillMarket(state);
+    const skillPoolSize = Math.min(6, state.players.length);
+    state.skillPool = {
+      3: shuffle(state, getSkillChoices(3)).slice(0, skillPoolSize).map((skill) => skill.id),
+      6: shuffle(state, getSkillChoices(6)).slice(0, skillPoolSize).map((skill) => skill.id),
+      10: shuffle(state, getSkillChoices(10)).slice(0, skillPoolSize).map((skill) => skill.id)
+    };
 
     let candidates = state.players.map((item) => item.id);
     while (candidates.length > 1) {
@@ -472,8 +533,32 @@ export function dispatch(state: GameState, playerId: string, command: GameComman
 
     if (command.face === 1 || command.face === 2 || command.face === 3) {
       const count = markFaceResolved(state, command.face);
-      if (count >= 3) gain(state, actor, "vp", command.face + count - 3);
-      else log(state, `${actor.name} 的 ${count} 个数字 ${command.face} 未形成组合`);
+      if (count >= 3) {
+        gain(state, actor, "vp", command.face + count - 3);
+      } else {
+        log(state, `${actor.name} 的 ${count} 个数字 ${command.face} 未形成组合`);
+      }
+
+      const gainsLevels = command.face !== 3 && count >= 3 && actor.level < 10;
+      if (gainsLevels) {
+        const oldLevel = actor.level;
+        const gainedLevels = command.face === 1 ? 2 : 1;
+        actor.level = Math.min(10, oldLevel + gainedLevels);
+        const crossedTier = ([3, 6, 10] as SkillTier[]).find(
+          (tier) => oldLevel < tier && actor.level >= tier
+        );
+        log(
+          state,
+          `${actor.name} 提升 ${actor.level - oldLevel} 级，升至 ${actor.level} 级`,
+          "good"
+        );
+        if (crossedTier) {
+          state.pendingSkillPlayerId = actor.id;
+          state.pendingSkillTier = crossedTier;
+          state.resumePhase = "resolving";
+          state.phase = "choosingSkill";
+        }
+      }
     } else if (command.face === "energy") {
       gain(state, actor, "energy", markFaceResolved(state, "energy"));
     } else if (command.face === "smash") {
@@ -493,6 +578,33 @@ export function dispatch(state: GameState, playerId: string, command: GameComman
         log(state, `${actor.name} 在东京内，治疗骰没有效果`);
       }
     }
+    finishResolutionIfReady(state);
+  } else if (command.type === "CHOOSE_SKILL") {
+    if (
+      state.phase !== "choosingSkill" ||
+      state.pendingSkillPlayerId !== playerId ||
+      !state.pendingSkillTier
+    ) {
+      throw new RuleError("当前不需要选择技能");
+    }
+    const skill = getSkillById(command.skillId);
+    if (
+      !skill ||
+      skill.tier !== state.pendingSkillTier ||
+      !state.skillPool[state.pendingSkillTier].includes(skill.id)
+    ) {
+      throw new RuleError("该技能不属于当前等级的技能池");
+    }
+    if (state.players.some((item) => item.skills.some((owned) => owned.id === skill.id))) {
+      throw new RuleError("该技能已经被其他玩家选择");
+    }
+    actor.skills.push(skill);
+    skill.effects.forEach((effect) => applyCardEffect(state, actor, effect));
+    log(state, `${actor.name} 学会了「${skill.name}」`, "good");
+    state.pendingSkillPlayerId = null;
+    state.pendingSkillTier = null;
+    state.phase = state.resumePhase ?? "resolving";
+    state.resumePhase = null;
     finishResolutionIfReady(state);
   } else if (command.type === "YIELD_TOKYO") {
     if (state.phase !== "yielding" || state.pendingYields[0] !== playerId) {

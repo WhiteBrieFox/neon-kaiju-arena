@@ -3,6 +3,7 @@ export type GamePhase =
   | "lobby"
   | "rolling"
   | "resolving"
+  | "choosingSkill"
   | "yielding"
   | "buying"
   | "finished";
@@ -47,6 +48,16 @@ export interface PowerCard {
   effects: CardEffect[];
 }
 
+export type SkillTier = 3 | 6 | 10;
+
+export interface MonsterSkill {
+  id: string;
+  tier: SkillTier;
+  name: string;
+  text: string;
+  effects: CardEffect[];
+}
+
 export interface DieState {
   id: number;
   face: DieFace;
@@ -66,6 +77,9 @@ export interface PlayerState {
   alive: boolean;
   connected: boolean;
   isHost: boolean;
+  isBot: boolean;
+  level: number;
+  skills: MonsterSkill[];
   cards: PowerCard[];
   poison: number;
   shrink: number;
@@ -95,7 +109,10 @@ export interface GameState {
   deck: PowerCard[];
   discard: PowerCard[];
   market: PowerCard[];
+  skillPool: Record<SkillTier, string[]>;
   pendingYields: string[];
+  pendingSkillPlayerId: string | null;
+  pendingSkillTier: SkillTier | null;
   resumePhase: GamePhase | null;
   winnerIds: string[];
   extraTurn: boolean;
@@ -120,6 +137,7 @@ export type GameCommand =
       healMode?: "hp" | "poison" | "shrink";
       targetId?: string;
     }
+  | { type: "CHOOSE_SKILL"; skillId: string }
   | { type: "YIELD_TOKYO"; yield: boolean }
   | { type: "BUY_CARD"; cardId: string; targetId?: string }
   | { type: "SWEEP_MARKET" }
@@ -161,6 +179,12 @@ export interface ClientToServerEvents {
     data: RoomIdentity,
     ack: (response: SocketAck<RoomIdentity>) => void
   ) => void;
+  addBot: (ack: (response: SocketAck) => void) => void;
+  removeBot: (
+    data: { playerId: string },
+    ack: (response: SocketAck) => void
+  ) => void;
+  leaveRoom: (ack: (response: SocketAck) => void) => void;
   command: (
     data: CommandEnvelope,
     ack: (response: SocketAck) => void
