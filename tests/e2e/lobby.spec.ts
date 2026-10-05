@@ -49,9 +49,19 @@ test("a host can start a match against a bot", async ({ page }) => {
 
   await expect(page.locator(".turn-banner strong")).toContainText("的回合");
   await expect(page.locator(".player-panel")).toHaveCount(2);
+  await expect(page.locator(".player-panel.is-active")).toHaveCount(1);
+  await expect(page.locator(".stat-hp").first()).toContainText("/");
   await page.getByRole("button", { name: "查看Solo的能力" }).click();
   await expect(page.getByRole("heading", { name: "进化技能" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "保留卡牌" })).toBeVisible();
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByRole("button", { name: "查看全部战况记录" }).click();
+  await expect(page.getByRole("heading", { name: "全部战况记录" })).toBeVisible();
+  await expect(page.locator(".log-history-list button")).toHaveCount(5);
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.locator(".log-list button").first().click();
+  await expect(page.getByText("COMBAT RECORD")).toBeVisible();
+  await expect(page.locator(".log-detail-meta").getByText("第 1 轮", { exact: true })).toBeVisible();
 });
 
 test("a player can leave the lobby and return to the welcome screen", async ({ browser }) => {

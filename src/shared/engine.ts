@@ -38,14 +38,17 @@ function shuffle<T>(state: GameState, values: T[]): T[] {
 function log(
   state: GameState,
   text: string,
-  tone: "neutral" | "good" | "danger" | "energy" = "neutral"
+  tone: "neutral" | "good" | "danger" | "energy" = "neutral",
+  detail: Partial<Omit<GameState["log"][number], "id" | "text" | "tone" | "round" | "phase">> = {}
 ) {
   state.log.push({
     id: (state.log.at(-1)?.id ?? 0) + 1,
     text,
-    tone
+    tone,
+    round: state.round,
+    phase: state.phase,
+    ...detail
   });
-  state.log = state.log.slice(-80);
 }
 
 function player(state: GameState, playerId: string): PlayerState {
@@ -120,8 +123,13 @@ function eliminate(state: GameState, target: PlayerState) {
 
 function loseHp(state: GameState, target: PlayerState, amount: number, reason: string) {
   if (!target.alive || amount <= 0) return;
+  const previousHp = target.hp;
   target.hp = Math.max(0, target.hp - amount);
-  log(state, `${target.name} ${reason}，失去 ${amount} 点生命`, "danger");
+  log(state, `${target.name} ${reason}，失去 ${amount} 点生命`, "danger", {
+    kind: "health",
+    detail: `${target.name} 的生命由 ${previousHp}/${target.maxHp} 降至 ${target.hp}/${target.maxHp}。`,
+    targetIds: [target.id]
+  });
   eliminate(state, target);
 }
 
@@ -131,11 +139,22 @@ function gain(
   resource: "hp" | "energy" | "vp",
   amount: number
 ) {
+  const previousValue = resource === "hp" ? target.hp : resource === "energy" ? target.energy : target.vp;
   if (resource === "hp") target.hp = Math.min(target.maxHp, target.hp + amount);
   if (resource === "energy") target.energy += amount;
   if (resource === "vp") target.vp += amount;
   const labels = { hp: "生命", energy: "能量", vp: "胜利分" };
-  log(state, `${target.name} 获得 ${amount} 点${labels[resource]}`, resource === "energy" ? "energy" : "good");
+  const nextValue = resource === "hp" ? target.hp : resource === "energy" ? target.energy : target.vp;
+  log(
+    state,
+    `${target.name} 获得 ${amount} 点${labels[resource]}`,
+    resource === "energy" ? "energy" : "good",
+    {
+      kind: resource === "hp" ? "health" : "system",
+      detail: `${labels[resource]}由 ${previousValue} 变为 ${nextValue}${resource === "hp" ? `/${target.maxHp}` : ""}。`,
+      actorId: target.id
+    }
+  );
 }
 
 function activeDiceCount(state: GameState, target: PlayerState) {
@@ -168,7 +187,11 @@ function startTurn(state: GameState, target: PlayerState) {
     const base = state.twoPlayerVariant && state.players.filter((item) => item.alive).length === 2 ? 1 : 2;
     gain(state, target, "vp", base + passiveAmount(target, "tokyoBonus"));
   }
-  log(state, `第 ${state.round} 轮：${target.name} 的回合`);
+  log(state, `第 ${state.round} 轮：${target.name} 的回合`, "neutral", {
+    kind: "turn",
+    detail: `${target.name} 开始行动，本回合最多可以掷 ${state.maxRolls} 次骰子。`,
+    actorId: target.id
+  });
 }
 
 function enterTokyo(state: GameState, target: PlayerState) {
@@ -229,6 +252,20 @@ function applyAttack(state: GameState, attacker: PlayerState, count: number) {
   if (count <= 0) return;
   const total = count + passiveAmount(attacker, "attackBonus");
   const targets = attackTargets(state, attacker.id);
+  const attackerInTokyo = isInTokyo(state, attacker.id);
+  log(
+    state,
+    `${attacker.name} 向${attackerInTokyo ? "东京外" : "东京内"}发动 ${total} 点攻击`,
+    "danger",
+    {
+      kind: "attack",
+      detail: targets.length
+        ? `攻击方向：${attackerInTokyo ? "东京内 → 东京外" : "东京外 → 东京内"}。目标：${targets.map((target) => target.name).join("、")}。`
+        : "当前没有符合东京内外规则的攻击目标。",
+      actorId: attacker.id,
+      targetIds: targets.map((target) => target.id)
+    }
+  );
   targets.forEach((target) => loseHp(state, target, total, `受到 ${attacker.name} 的攻击`));
 
   if (passiveAmount(attacker, "energyOnSmash") > 0 && targets.length > 0) {
@@ -510,7 +547,11 @@ export function dispatch(state: GameState, playerId: string, command: GameComman
       if (!die.locked) die.face = faces[Math.floor(nextRandom(state) * faces.length)];
     });
     state.rollCount += 1;
-    log(state, `${actor.name} 第 ${state.rollCount} 次掷骰`);
+    log(state, `${actor.name} 第 ${state.rollCount} 次掷骰`, "neutral", {
+      kind: "dice",
+      detail: `本次结果：${state.dice.map((die) => die.face).join("、")}。`,
+      actorId: actor.id
+    });
   } else if (command.type === "TOGGLE_DIE") {
     assertTurn(state, playerId);
     if (state.phase !== "rolling" || state.rollCount === 0) throw new RuleError("当前不能保留骰子");
@@ -600,7 +641,11 @@ export function dispatch(state: GameState, playerId: string, command: GameComman
     }
     actor.skills.push(skill);
     skill.effects.forEach((effect) => applyCardEffect(state, actor, effect));
-    log(state, `${actor.name} 学会了「${skill.name}」`, "good");
+    log(state, `${actor.name} 学会了「${skill.name}」`, "good", {
+      kind: "skill",
+      detail: `等级 ${skill.tier} 进化技能：${skill.text}`,
+      actorId: actor.id
+    });
     state.pendingSkillPlayerId = null;
     state.pendingSkillTier = null;
     state.phase = state.resumePhase ?? "resolving";
@@ -638,7 +683,12 @@ export function dispatch(state: GameState, playerId: string, command: GameComman
     card.effects.forEach((effect) => applyCardEffect(state, actor, effect, command.targetId));
     if (card.type === "discard") state.discard.push(card);
     refillMarket(state);
-    log(state, `${actor.name} 购买了「${card.name}」`, "energy");
+    log(state, `${actor.name} 购买了「${card.name}」`, "energy", {
+      kind: "card",
+      detail: `支付 ${cost} 点能量。${card.type === "keep" ? "保留卡，效果持续生效。" : "立即卡，购买后立刻结算。"} ${card.text}`,
+      actorId: actor.id,
+      targetIds: command.targetId ? [command.targetId] : undefined
+    });
   } else if (command.type === "SWEEP_MARKET") {
     assertTurn(state, playerId);
     if (state.phase !== "buying") throw new RuleError("当前不能刷新市场");
@@ -647,7 +697,11 @@ export function dispatch(state: GameState, playerId: string, command: GameComman
     state.discard.push(...state.market);
     state.market = [];
     refillMarket(state);
-    log(state, `${actor.name} 刷新了卡牌市场`, "energy");
+    log(state, `${actor.name} 刷新了卡牌市场`, "energy", {
+      kind: "card",
+      detail: "支付 2 点能量，弃掉市场中的三张卡，并从牌库补充三张新卡。",
+      actorId: actor.id
+    });
   } else if (command.type === "END_TURN") {
     assertTurn(state, playerId);
     if (state.phase !== "buying") throw new RuleError("当前不能结束回合");

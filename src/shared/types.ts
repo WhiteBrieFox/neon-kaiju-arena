@@ -89,6 +89,12 @@ export interface GameLogEntry {
   id: number;
   tone: "neutral" | "good" | "danger" | "energy";
   text: string;
+  round?: number;
+  phase?: GamePhase;
+  kind?: "turn" | "dice" | "attack" | "health" | "card" | "skill" | "tokyo" | "system";
+  detail?: string;
+  actorId?: string;
+  targetIds?: string[];
 }
 
 export interface GameState {

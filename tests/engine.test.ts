@@ -315,6 +315,12 @@ describe("game engine", () => {
     expect(state.players[1].hp).toBe(8);
     expect(state.pendingYields).toEqual(["p1", "p2"]);
     expect(state.phase).toBe("yielding");
+    expect(state.log.find((entry) => entry.kind === "attack")).toMatchObject({
+      actorId: "p3",
+      targetIds: ["p1", "p2"],
+      round: 1,
+      phase: "resolving"
+    });
 
     dispatch(state, "p1", { type: "YIELD_TOKYO", yield: true });
     dispatch(state, "p2", { type: "YIELD_TOKYO", yield: false });
@@ -434,6 +440,12 @@ describe("game engine", () => {
     expect(state.market).toHaveLength(3);
     expect(state.deck.length).toBe(beforeDeck - 1);
     expect(state.discard.some((item) => item.id === card.id)).toBe(true);
+    expect(state.log.at(-1)).toMatchObject({
+      kind: "card",
+      actorId: "p1",
+      phase: "buying"
+    });
+    expect(state.log.at(-1)?.detail).toContain(card.text);
   });
 
   it("applies energy circuit discount when purchasing cards", () => {

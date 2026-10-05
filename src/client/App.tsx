@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Activity,
+  ArrowRight,
   BookOpen,
   Bot,
   Bolt,
@@ -9,9 +10,11 @@ import {
   CircleDot,
   Clock3,
   Copy,
+  Crosshair,
   Crown,
   Dices,
   DoorOpen,
+  Eye,
   Heart,
   LogIn,
   LogOut,
@@ -19,6 +22,7 @@ import {
   Radio,
   RefreshCcw,
   RotateCcw,
+  ScrollText,
   ShieldAlert,
   ShoppingCart,
   Skull,
@@ -41,6 +45,7 @@ import type {
   CommandEnvelope,
   DieFace,
   GameCommand,
+  GameLogEntry,
   MonsterSkill,
   MonsterId,
   PlayerState,
@@ -51,7 +56,7 @@ import type {
 } from "../shared/types";
 import { MONSTERS } from "../shared/types";
 import { getSkillChoices } from "../shared/skills";
-import { getCardCost } from "../shared/engine";
+import { getCardCost, getPassiveAmount } from "../shared/engine";
 
 const STORAGE_KEY = "neon-kaiju-session";
 const AUDIO_ENABLED_KEY = "neon-kaiju-audio-enabled";
@@ -432,18 +437,23 @@ function CombatVfx({
 function Stat({
   icon,
   value,
+  max,
   tone,
   label
 }: {
   icon: React.ReactNode;
   value: number;
+  max?: number;
   tone: "hp" | "vp" | "energy";
   label: string;
 }) {
   return (
     <div className={`stat stat-${tone}`} title={label}>
       {icon}
-      <strong>{value}</strong>
+      <strong>
+        {value}
+        {max !== undefined && <small>/{max}</small>}
+      </strong>
     </div>
   );
 }
@@ -452,12 +462,16 @@ function PlayerPanel({
   player,
   active,
   inTokyo,
+  attackSource,
+  attackTarget,
   isSelf,
   onInspect
 }: {
   player: PlayerState;
   active: boolean;
   inTokyo: boolean;
+  attackSource: boolean;
+  attackTarget: boolean;
   isSelf: boolean;
   onInspect: () => void;
 }) {
@@ -470,10 +484,22 @@ function PlayerPanel({
         "player-panel",
         active ? "is-active" : "",
         inTokyo ? "is-tokyo" : "",
+        attackSource ? "is-attack-source" : "",
+        attackTarget ? "is-attack-target" : "",
         !player.alive ? "is-out" : ""
       ].join(" ")}
       style={{ "--monster-color": monster.colors[0] } as React.CSSProperties}
     >
+      {active && (
+        <span className="active-turn-label">
+          <Radio size={10} /> 行动中
+        </span>
+      )}
+      {attackTarget && (
+        <span className="attack-target-label">
+          <Crosshair size={10} /> 攻击目标
+        </span>
+      )}
       <div className="player-avatar">
         <MonsterArt monster={selectedMonster} size={70} defeated={!player.alive} />
         <span className={`connection-dot ${player.connected ? "" : "offline"}`} />
@@ -488,9 +514,12 @@ function PlayerPanel({
         <span className="monster-title">{monster.name}</span>
         <div className="stats-row">
           <span className="level-stat">LV.{player.level}</span>
-          <Stat icon={<Heart size={14} />} value={player.hp} tone="hp" label="生命" />
+          <Stat icon={<Heart size={14} />} value={player.hp} max={player.maxHp} tone="hp" label={`生命 ${player.hp}/${player.maxHp}`} />
           <Stat icon={<Crown size={14} />} value={player.vp} tone="vp" label="胜利分" />
           <Stat icon={<Bolt size={14} />} value={player.energy} tone="energy" label="能量" />
+        </div>
+        <div className="player-health-track" title={`生命 ${player.hp}/${player.maxHp}`}>
+          <span style={{ width: `${Math.max(0, Math.min(100, (player.hp / player.maxHp) * 100))}%` }} />
         </div>
         {(player.poison > 0 || player.shrink > 0) && (
           <div className="token-row">
@@ -506,8 +535,17 @@ function PlayerPanel({
         title={`查看${player.name}的能力`}
         aria-label={`查看${player.name}的能力`}
       >
-        <Layers3 />
-        <span>{player.skills.length + player.cards.length}</span>
+        <span title={`${player.skills.length} 个技能`}>
+          <Sparkles />
+          <small>技</small>
+          <b>{player.skills.length}</b>
+        </span>
+        <i />
+        <span title={`${player.cards.length} 张保留卡`}>
+          <Layers3 />
+          <small>卡</small>
+          <b>{player.cards.length}</b>
+        </span>
       </button>
       {active && <motion.span layoutId="active-turn" className="turn-pulse" />}
     </motion.article>
@@ -524,10 +562,12 @@ function DieIcon({ face }: { face: DieFace }) {
 function DiceTray({
   state,
   isTurn,
+  attackHint,
   onCommand
 }: {
   state: ClientGameState;
   isTurn: boolean;
+  attackHint?: string;
   onCommand: (command: GameCommand) => void;
 }) {
   const canToggle = isTurn && state.phase === "rolling" && state.rollCount > 0;
@@ -537,8 +577,8 @@ function DiceTray({
   );
   return (
     <section className="dice-console">
-      <div className="dice-header">
-        <div>
+      <div className="dice-workspace">
+        <div className="dice-header">
           <span className="eyebrow">战斗控制台</span>
           <h2>
             {state.phase === "rolling" && (isTurn ? "选择命运" : "等待掷骰")}
@@ -547,88 +587,91 @@ function DiceTray({
             {state.phase === "yielding" && "东京攻防决策"}
             {state.phase === "buying" && (isTurn ? "整备与升级" : "对手正在购买")}
           </h2>
-        </div>
-        <div className="roll-meter">
-          {Array.from({ length: state.maxRolls }, (_, index) => (
-            <span key={index} className={index < state.rollCount ? "filled" : ""} />
-          ))}
-        </div>
-      </div>
-
-      <div className="dice-row">
-        {state.dice.map((die, index) => (
-          <motion.button
-            key={die.id}
-            type="button"
-            className={`die face-${die.face} ${die.locked ? "locked" : ""} ${
-              die.resolved ? "resolved" : ""
-            }`}
-            disabled={!canToggle || die.resolved}
-            onClick={() => onCommand({ type: "TOGGLE_DIE", dieId: die.id })}
-            animate={
-              state.phase === "rolling" && state.rollCount > 0 && !die.locked
-                ? { rotate: [0, 7, -5, 0], y: [0, -5, 2, 0] }
-                : {}
-            }
-            transition={{ delay: index * 0.035, duration: 0.45 }}
-            aria-label={`${String(die.face)}${die.locked ? "，已保留" : ""}`}
-          >
-            <DieIcon face={die.face} />
-            {die.locked && <span className="lock-mark"><Check size={11} /></span>}
-          </motion.button>
-        ))}
-      </div>
-
-      <div className="action-row">
-        {state.phase === "rolling" && isTurn && (
-          <>
-            <button
-              className="primary-action"
-              onClick={() => onCommand({ type: "ROLL_DICE" })}
-              disabled={state.rollCount >= state.maxRolls}
-            >
-              {state.rollCount === 0 ? <Dices /> : <RotateCcw />}
-              {state.rollCount === 0 ? "掷骰" : `重掷 ${state.maxRolls - state.rollCount > 0 ? "" : "已用尽"}`}
-            </button>
-            <button
-              className="secondary-action"
-              onClick={() => onCommand({ type: "FINISH_ROLLING" })}
-              disabled={state.rollCount === 0}
-            >
-              <Check /> 开始结算
-            </button>
-          </>
-        )}
-        {state.phase === "resolving" && isTurn && (
-          <div className="resolve-actions">
-            {unresolvedFaces.map((face) => (
-              <button
-                className={`resolve-chip face-${face}`}
-                key={face}
-                onClick={() =>
-                  onCommand({
-                    type: "RESOLVE_FACE",
-                    face,
-                    healMode: face === "heal" ? "hp" : undefined
-                  })
-                }
-              >
-                <DieIcon face={face} />
-                结算
-              </button>
+          <div className="roll-meter">
+            {Array.from({ length: state.maxRolls }, (_, index) => (
+              <span key={index} className={index < state.rollCount ? "filled" : ""} />
             ))}
           </div>
-        )}
-        {state.phase === "buying" && isTurn && (
-          <button className="primary-action end-turn" onClick={() => onCommand({ type: "END_TURN" })}>
-            结束回合 <ChevronRight />
-          </button>
-        )}
-        {!isTurn && state.phase !== "yielding" && (
-          <div className="waiting-label">
-            <Radio size={18} /> 同步对局中
-          </div>
-        )}
+        </div>
+
+        <div className="dice-row">
+          {state.dice.map((die, index) => (
+            <motion.button
+              key={die.id}
+              type="button"
+              className={`die face-${die.face} ${die.locked ? "locked" : ""} ${
+                die.resolved ? "resolved" : ""
+              }`}
+              disabled={!canToggle || die.resolved}
+              onClick={() => onCommand({ type: "TOGGLE_DIE", dieId: die.id })}
+              animate={
+                state.phase === "rolling" && state.rollCount > 0 && !die.locked
+                  ? { rotate: [0, 7, -5, 0], y: [0, -5, 2, 0] }
+                  : {}
+              }
+              transition={{ delay: index * 0.035, duration: 0.45 }}
+              aria-label={`${String(die.face)}${die.locked ? "，已保留" : ""}`}
+            >
+              <DieIcon face={die.face} />
+              {die.locked && <span className="lock-mark"><Check size={11} /></span>}
+            </motion.button>
+          ))}
+        </div>
+
+        <div className="action-row">
+          {state.phase === "rolling" && isTurn && (
+            <>
+              <button
+                className="primary-action"
+                onClick={() => onCommand({ type: "ROLL_DICE" })}
+                disabled={state.rollCount >= state.maxRolls}
+              >
+                {state.rollCount === 0 ? <Dices /> : <RotateCcw />}
+                {state.rollCount === 0 ? "掷骰" : `重掷 ${state.maxRolls - state.rollCount > 0 ? "" : "已用尽"}`}
+              </button>
+              <button
+                className="secondary-action"
+                onClick={() => onCommand({ type: "FINISH_ROLLING" })}
+                disabled={state.rollCount === 0}
+              >
+                <Check /> 开始结算
+              </button>
+            </>
+          )}
+          {state.phase === "resolving" && isTurn && (
+            <div className="resolve-actions">
+              {unresolvedFaces.map((face) => (
+                <button
+                  className={`resolve-chip face-${face}`}
+                  key={face}
+                  onClick={() =>
+                    onCommand({
+                      type: "RESOLVE_FACE",
+                      face,
+                      healMode: face === "heal" ? "hp" : undefined
+                    })
+                  }
+                >
+                  <DieIcon face={face} />
+                  <span>
+                    {face === "smash" ? "发动攻击" : "结算"}
+                    {face === "smash" && attackHint && <small>{attackHint}</small>}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          {state.phase === "buying" && isTurn && (
+            <button className="primary-action end-turn" onClick={() => onCommand({ type: "END_TURN" })}>
+              结束回合 <ChevronRight />
+            </button>
+          )}
+          {!isTurn && state.phase !== "yielding" && (
+            <div className="waiting-label">
+              <Radio size={18} /> 同步对局中
+            </div>
+          )}
+        </div>
       </div>
     </section>
   );
@@ -637,18 +680,27 @@ function DiceTray({
 function TokyoSlot({
   label,
   player,
-  variant
+  variant,
+  attackSource = false,
+  attackTarget = false
 }: {
   label: string;
   player?: PlayerState;
   variant: "city" | "bay";
+  attackSource?: boolean;
+  attackTarget?: boolean;
 }) {
   return (
-    <div className={`tokyo-slot ${variant}`}>
+    <div className={`tokyo-slot ${variant} ${attackSource ? "is-attack-source" : ""} ${attackTarget ? "is-attack-target" : ""}`}>
       <div className="slot-label">
         <CircleDot size={14} />
         {label}
       </div>
+      {attackTarget && (
+        <span className="tokyo-target-lock">
+          <Crosshair size={12} /> 锁定
+        </span>
+      )}
       <AnimatePresence mode="wait">
         {player ? (
           <motion.div
@@ -694,6 +746,10 @@ function CardView({
   return (
     <motion.button
       layout
+      initial={{ opacity: 0, y: -24, rotateY: -70, scale: 0.92 }}
+      animate={{ opacity: 1, y: 0, rotateY: 0, scale: 1 }}
+      exit={{ opacity: 0, x: 60, rotate: 5, scale: 0.86 }}
+      transition={{ type: "spring", stiffness: 260, damping: 22 }}
       whileHover={!disabled ? { y: -7, rotate: -0.6 } : undefined}
       whileTap={!disabled ? { scale: 0.98 } : undefined}
       className={`power-card accent-${card.accent}`}
@@ -707,12 +763,46 @@ function CardView({
           <Bolt size={14} fill="currentColor" /> {cost}
         </span>
       </div>
+      <span className="card-emblem">
+        {card.type === "keep" ? <Layers3 /> : <Sparkles />}
+      </span>
       <h3>{card.name}</h3>
       <p>{card.text}</p>
       <span className="buy-label">
         <ShoppingCart size={15} /> 购买
       </span>
     </motion.button>
+  );
+}
+
+function CardAcquisitionFx({
+  card,
+  playerName,
+  onComplete
+}: {
+  card: PowerCard;
+  playerName: string;
+  onComplete: () => void;
+}) {
+  return (
+    <motion.div
+      className={`card-acquisition-fx accent-${card.accent}`}
+      initial={{ opacity: 0, scale: 0.72, y: 80, rotate: -7 }}
+      animate={{
+        opacity: [0, 1, 1, 0],
+        scale: [0.72, 1.05, 1, 0.88],
+        y: [80, 0, -8, -90],
+        rotate: [-7, 1, 0, 4]
+      }}
+      transition={{ duration: 1.45, times: [0, 0.22, 0.72, 1] }}
+      onAnimationComplete={onComplete}
+    >
+      <span className="card-acquisition-kicker">
+        <ShoppingCart size={13} /> {playerName} 获得卡牌
+      </span>
+      <strong>{card.name}</strong>
+      <p>{card.text}</p>
+    </motion.div>
   );
 }
 
@@ -971,6 +1061,11 @@ function PlayerDetailsModal({
             <span className="eyebrow">LV.{player.level} LOADOUT</span>
             <h2>{player.name}</h2>
             <p>{monster.name} · {monster.title}</p>
+            <div className="loadout-summary">
+              <span><Heart />{player.hp}/{player.maxHp} 生命</span>
+              <span><Sparkles />{player.skills.length} 技能</span>
+              <span><Layers3 />{player.cards.length} 卡牌</span>
+            </div>
           </div>
         </header>
         <section className="loadout-section">
@@ -995,6 +1090,144 @@ function PlayerDetailsModal({
             )) : <p className="loadout-empty">没有保留卡牌</p>}
           </div>
         </section>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+const PHASE_LABELS: Record<ClientGameState["phase"], string> = {
+  lobby: "房间准备",
+  rolling: "掷骰",
+  resolving: "结算骰子",
+  choosingSkill: "选择技能",
+  yielding: "东京攻防",
+  buying: "购买卡牌",
+  finished: "对局结束"
+};
+
+const LOG_KIND_LABELS: Record<NonNullable<GameLogEntry["kind"]>, string> = {
+  turn: "回合",
+  dice: "骰子",
+  attack: "攻击",
+  health: "生命",
+  card: "卡牌",
+  skill: "进化",
+  tokyo: "东京",
+  system: "战况"
+};
+
+function inferLogKind(entry: GameLogEntry): NonNullable<GameLogEntry["kind"]> {
+  if (entry.kind) return entry.kind;
+  if (/回合|先手/.test(entry.text)) return "turn";
+  if (/掷骰|结算/.test(entry.text)) return "dice";
+  if (/攻击|伤害|失去|淘汰/.test(entry.text)) return "attack";
+  if (/生命|治疗/.test(entry.text)) return "health";
+  if (/卡牌|购买|市场/.test(entry.text)) return "card";
+  if (/技能|学会|提升/.test(entry.text)) return "skill";
+  if (/东京/.test(entry.text)) return "tokyo";
+  return "system";
+}
+
+function LogDetailsModal({
+  entry,
+  state,
+  onClose
+}: {
+  entry: GameLogEntry;
+  state: ClientGameState;
+  onClose: () => void;
+}) {
+  const kind = inferLogKind(entry);
+  const relatedIds = new Set([entry.actorId, ...(entry.targetIds ?? [])].filter(Boolean));
+  const relatedPlayers = state.players.filter((player) => relatedIds.has(player.id));
+
+  return (
+    <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <motion.div
+        className={`log-details-modal tone-${entry.tone}`}
+        initial={{ scale: 0.92, y: 18 }}
+        animate={{ scale: 1, y: 0 }}
+      >
+        <button className="icon-button modal-close" onClick={onClose} title="关闭"><X /></button>
+        <span className="eyebrow">COMBAT RECORD</span>
+        <div className="log-detail-title">
+          <span><ScrollText /></span>
+          <div>
+            <small>{LOG_KIND_LABELS[kind]}</small>
+            <h2>{entry.text}</h2>
+          </div>
+        </div>
+        <div className="log-detail-meta">
+          <span>第 {entry.round ?? state.round} 轮</span>
+          <span>{PHASE_LABELS[entry.phase ?? state.phase]}</span>
+          <span>记录 #{entry.id}</span>
+        </div>
+        <p className="log-detail-copy">{entry.detail ?? "该记录来自战局同步，完整结果已反映在玩家状态中。"}</p>
+        {relatedPlayers.length > 0 && (
+          <div className="log-related-players">
+            {relatedPlayers.map((player) => (
+              <article key={player.id}>
+                <MonsterArt monster={playerMonster(player)} size={48} />
+                <div>
+                  <strong>{player.name}</strong>
+                  <span>{player.hp}/{player.maxHp} HP · LV.{player.level}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function LogHistoryModal({
+  entries,
+  onSelect,
+  onClose
+}: {
+  entries: GameLogEntry[];
+  onSelect: (entry: GameLogEntry) => void;
+  onClose: () => void;
+}) {
+  return (
+    <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <motion.div
+        className="log-history-modal"
+        initial={{ scale: 0.94, y: 18 }}
+        animate={{ scale: 1, y: 0 }}
+      >
+        <button className="icon-button modal-close" onClick={onClose} title="关闭"><X /></button>
+        <header className="log-history-heading">
+          <span><ScrollText /></span>
+          <div>
+            <span className="eyebrow">FULL COMBAT HISTORY</span>
+            <h2>全部战况记录</h2>
+            <p>共 {entries.length} 条记录</p>
+          </div>
+        </header>
+        <div className="log-history-list">
+          {[...entries].reverse().map((entry) => {
+            const kind = inferLogKind(entry);
+            return (
+              <button
+                type="button"
+                key={entry.id}
+                className={`tone-${entry.tone}`}
+                onClick={() => onSelect(entry)}
+              >
+                <span className="history-kind">{LOG_KIND_LABELS[kind]}</span>
+                <div>
+                  <strong>{entry.text}</strong>
+                  <small>
+                    第 {entry.round ?? 1} 轮 · {PHASE_LABELS[entry.phase ?? "lobby"]} · #{entry.id}
+                  </small>
+                </div>
+                <ChevronRight />
+              </button>
+            );
+          })}
+        </div>
       </motion.div>
     </motion.div>
   );
@@ -1135,6 +1368,13 @@ function GameBoard({
 }) {
   const [targetCard, setTargetCard] = useState<PowerCard | null>(null);
   const [inspectedPlayerId, setInspectedPlayerId] = useState<string | null>(null);
+  const [selectedLogId, setSelectedLogId] = useState<number | null>(null);
+  const [logHistoryOpen, setLogHistoryOpen] = useState(false);
+  const [cardAcquisition, setCardAcquisition] = useState<{
+    key: number;
+    card: PowerCard;
+    playerName: string;
+  } | null>(null);
   const self = state.players.find((item) => item.id === identity.playerId)!;
   const current = state.players.find((item) => item.id === state.currentPlayerId);
   const city = state.players.find((item) => item.id === state.tokyoCity);
@@ -1146,13 +1386,53 @@ function GameBoard({
     state.pendingSkillPlayerId === identity.playerId &&
     state.pendingSkillTier;
   const inspectedPlayer = state.players.find((player) => player.id === inspectedPlayerId);
+  const selectedLog = state.log.find((entry) => entry.id === selectedLogId);
   const latestLog = state.log[state.log.length - 1];
+  const unresolvedSmashes = state.dice.filter(
+    (die) => !die.resolved && die.face === "smash"
+  ).length;
+  const attackPreviewActive =
+    state.phase === "resolving" && unresolvedSmashes > 0 && Boolean(current);
+  const currentInTokyo = current
+    ? current.id === state.tokyoCity || current.id === state.tokyoBay
+    : false;
+  const attackTargets = attackPreviewActive && current
+    ? state.players.filter((player) =>
+        player.alive &&
+        player.id !== current.id &&
+        (currentInTokyo
+          ? player.id !== state.tokyoCity && player.id !== state.tokyoBay
+          : player.id === state.tokyoCity || player.id === state.tokyoBay)
+      )
+    : [];
+  const attackTargetIds = new Set(attackTargets.map((player) => player.id));
+  const attackPower = current
+    ? unresolvedSmashes + getPassiveAmount(current, "attackBonus")
+    : unresolvedSmashes;
+  const attackHint = currentInTokyo ? "目标：东京外" : "目标：东京内";
+  const previousMarketRef = useRef(state.market);
   const [combatVfx, setCombatVfx] = useState<{
     key: number;
     kind: CombatVfxKind;
     monster: MonsterId;
   } | null>(null);
   const seenLogId = useRef(latestLog?.id);
+
+  useEffect(() => {
+    const previousMarket = previousMarketRef.current;
+    const currentIds = new Set(state.market.map((card) => card.id));
+    const removedCards = previousMarket.filter((card) => !currentIds.has(card.id));
+
+    if (removedCards.length === 1 && latestLog?.kind === "card" && /购买了/.test(latestLog.text)) {
+      const buyer = state.players.find((player) => player.id === latestLog.actorId);
+      setCardAcquisition({
+        key: latestLog.id,
+        card: removedCards[0],
+        playerName: buyer?.name ?? "怪兽"
+      });
+    }
+    previousMarketRef.current = state.market;
+  }, [latestLog, state.market, state.players]);
 
   useEffect(() => {
     if (!latestLog || latestLog.id === seenLogId.current) return;
@@ -1183,9 +1463,14 @@ function GameBoard({
           <CutoutImage src="/game-logo.png" alt="" />
           <span><strong>怪兽之夜</strong><small>NEON KAIJU ARENA</small></span>
         </div>
-        <div className="turn-banner">
-          <span>ROUND {state.round}</span>
-          <strong>{current ? `${current.name} 的回合` : "对局结束"}</strong>
+        <div
+          className="turn-banner"
+          style={current ? { "--turn-color": monsterById(playerMonster(current)).colors[0] } as React.CSSProperties : undefined}
+        >
+          <div>
+            <span>ROUND {state.round} · CURRENT TURN</span>
+            <strong>{current ? `${current.name} 的回合` : "对局结束"}</strong>
+          </div>
         </div>
         <div className="room-status">
           <span className={connected ? "online" : "offline"}>
@@ -1199,13 +1484,15 @@ function GameBoard({
         </div>
       </header>
 
-      <section className="player-strip">
+      <section className={`player-strip players-${Math.min(state.players.length, 6)}`}>
         {state.players.map((participant) => (
           <PlayerPanel
             key={participant.id}
             player={participant}
             active={state.currentPlayerId === participant.id}
             inTokyo={participant.id === state.tokyoCity || participant.id === state.tokyoBay}
+            attackSource={attackPreviewActive && participant.id === current?.id}
+            attackTarget={attackTargetIds.has(participant.id)}
             isSelf={participant.id === identity.playerId}
             onInspect={() => setInspectedPlayerId(participant.id)}
           />
@@ -1228,10 +1515,47 @@ function GameBoard({
             <span>TOKYO COMBAT ZONE</span>
             <strong>东京争夺区</strong>
           </div>
+          <AnimatePresence>
+            {attackPreviewActive && current && (
+              <motion.div
+                className="attack-route"
+                initial={{ opacity: 0, y: -10, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8 }}
+              >
+                <span className="attack-route-icon"><Crosshair /></span>
+                <div>
+                  <small>攻击路径已锁定 · {attackPower} 点伤害</small>
+                  <strong>
+                    {currentInTokyo ? "东京内" : "东京外"}
+                    <ArrowRight />
+                    {currentInTokyo ? "东京外全体" : "东京内怪兽"}
+                  </strong>
+                  <p>
+                    {attackTargets.length
+                      ? `目标：${attackTargets.map((player) => player.name).join("、")}`
+                      : "当前没有可攻击目标"}
+                  </p>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
           <div className="tokyo-slots">
-            <TokyoSlot label="东京城" player={city} variant="city" />
+            <TokyoSlot
+              label="东京城"
+              player={city}
+              variant="city"
+              attackSource={attackPreviewActive && city?.id === current?.id}
+              attackTarget={Boolean(city && attackTargetIds.has(city.id))}
+            />
             {state.players.filter((item) => item.alive).length >= 5 && (
-              <TokyoSlot label="东京湾" player={bay} variant="bay" />
+              <TokyoSlot
+                label="东京湾"
+                player={bay}
+                variant="bay"
+                attackSource={attackPreviewActive && bay?.id === current?.id}
+                attackTarget={Boolean(bay && attackTargetIds.has(bay.id))}
+              />
             )}
           </div>
           <div className="arena-rings"><i /><i /><i /></div>
@@ -1243,19 +1567,21 @@ function GameBoard({
             <span className="deck-count">{state.deckSize} <small>牌库</small></span>
           </div>
           <div className="card-stack">
-            {state.market.map((card) => {
-              const cost = getCardCost(self, card);
-              return (
-                <CardView
-                  key={card.id}
-                  card={card}
-                  cost={cost}
-                  affordable={self.energy >= cost}
-                  disabled={!isTurn || state.phase !== "buying" || self.energy < cost}
-                  onBuy={() => buy(card)}
-                />
-              );
-            })}
+            <AnimatePresence initial={false} mode="popLayout">
+              {state.market.map((card) => {
+                const cost = getCardCost(self, card);
+                return (
+                  <CardView
+                    key={card.id}
+                    card={card}
+                    cost={cost}
+                    affordable={self.energy >= cost}
+                    disabled={!isTurn || state.phase !== "buying" || self.energy < cost}
+                    onBuy={() => buy(card)}
+                  />
+                );
+              })}
+            </AnimatePresence>
           </div>
           <button
             className="sweep-button"
@@ -1268,23 +1594,52 @@ function GameBoard({
       </div>
 
       <div className="bottom-layout">
-        <DiceTray state={state} isTurn={isTurn} onCommand={onCommand} />
+        <DiceTray
+          state={state}
+          isTurn={isTurn}
+          attackHint={attackPreviewActive ? attackHint : undefined}
+          onCommand={onCommand}
+        />
         <aside className="combat-log">
-          <div className="log-title"><Activity size={16} />战况记录</div>
+          <button
+            type="button"
+            className="log-title"
+            onClick={() => setLogHistoryOpen(true)}
+            aria-label="查看全部战况记录"
+          >
+            <Activity size={16} />
+            <span>战况记录</span>
+            <small>{state.log.length} 条 · 查看全部</small>
+            <ChevronRight />
+          </button>
           <div className="log-list">
-            {[...state.log].reverse().slice(0, 5).map((entry) => (
-              <motion.p
+            {[...state.log].reverse().slice(0, 8).map((entry) => (
+              <motion.button
+                type="button"
                 initial={{ opacity: 0, x: 8 }}
                 animate={{ opacity: 1, x: 0 }}
                 key={entry.id}
                 className={entry.tone}
+                onClick={() => setSelectedLogId(entry.id)}
               >
-                {entry.text}
-              </motion.p>
+                <span>{entry.text}</span>
+                <Eye />
+              </motion.button>
             ))}
           </div>
         </aside>
       </div>
+
+      <AnimatePresence>
+        {cardAcquisition && (
+          <CardAcquisitionFx
+            key={cardAcquisition.key}
+            card={cardAcquisition.card}
+            playerName={cardAcquisition.playerName}
+            onComplete={() => setCardAcquisition(null)}
+          />
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {mustYield && (
@@ -1309,6 +1664,29 @@ function GameBoard({
           <PlayerDetailsModal
             player={inspectedPlayer}
             onClose={() => setInspectedPlayerId(null)}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {logHistoryOpen && (
+          <LogHistoryModal
+            entries={state.log}
+            onClose={() => setLogHistoryOpen(false)}
+            onSelect={(entry) => {
+              setLogHistoryOpen(false);
+              setSelectedLogId(entry.id);
+            }}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {selectedLog && (
+          <LogDetailsModal
+            entry={selectedLog}
+            state={state}
+            onClose={() => setSelectedLogId(null)}
           />
         )}
       </AnimatePresence>
